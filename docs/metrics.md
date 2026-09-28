@@ -151,6 +151,45 @@ complex one.
 
 ---
 
+## Cost of measuring
+
+Measured, not estimated, because "the metrics are slow" is a claim worth
+having numbers for. On a 3.5 GHz desktop, CPython 3.12:
+
+| | median |
+|---|---|
+`verify` on a typical proof, **including every metric on this page** | **0.16 ms** |
+`analyze_proof` on a 13 KB proof | 4.0 ms |
+`analyze_proof` on a 2000-step `have` chain | ~30 ms |
+`screen_source` (all ~40 reward-hacking patterns) on 13 KB | 3.2 ms |
+repetition metrics (lines + tactics + trigrams) on 13 KB | 1.7 ms |
+`sample_duplication` over 1000 samples | 0.13 ms |
+`summarize` over 1000 results | 23 ms |
+
+So a 1000-attempt run spends about **0.16 s** on metrics in total. Against
+Lean compile times of seconds to minutes per attempt, the analysis layer
+is a rounding error — the prover dominates by three to four orders of
+magnitude. Repetition specifically is among the cheapest things here:
+counting distinct lines, distinct tactics and distinct trigrams is one
+pass each over text already in memory.
+
+Two things were made cheap deliberately, because the naive versions were
+not:
+
+* **Dependency depth was quadratic.** Regex-searching every earlier step
+  name in every step's justification measured 177 ms at 400 steps.
+  Tokenizing each justification once and intersecting against the names
+  seen so far is linear: 1.2 ms at 400 steps, 140× faster.
+  `test_analysis_stays_linear_in_the_number_of_steps` locks this in.
+* **Tokenization and tactic extraction ran twice per attempt** — once for
+  the size metrics, once for repetition. They are computed once and passed
+  through now.
+
+The remaining largest cost is `screen_source`, and it is left alone on
+purpose: it is the check that decides whether any of the other numbers
+mean anything, and 3 ms is not worth trading for a fused-regex version
+that is harder to audit.
+
 ## Not computed, and why
 
 Stated so that nothing here looks more capable than it is.

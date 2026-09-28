@@ -193,7 +193,7 @@ class Verifier(abc.ABC):
         # as a success. Comparing the shape of failures against the shape
         # of passes is most of the analytical value here.
         tactics = extract_tactics(attempt.proof, task.language)
-        structure = analyze_proof(attempt.proof, task.language).to_dict()
+        structure = analyze_proof(attempt.proof, task.language, tactics=tactics).to_dict()
 
         def finish(
             status: Status,

@@ -121,6 +121,39 @@ def test_independent_steps_do_not_stack_depth():
     assert analyze_proof(proof).local_dependency_depth == 1
 
 
+def _chained_proof(n: int) -> str:
+    lines = ["by", "  have h0 : True := trivial"]
+    lines += ["  have h%d : True := by exact h%d" % (i, i - 1) for i in range(1, n)]
+    lines.append("  exact h%d" % (n - 1))
+    return "\n".join(lines)
+
+
+def test_dependency_depth_is_correct_on_a_long_chain():
+    structure = analyze_proof(_chained_proof(200))
+    assert structure.named_steps == 200
+    assert structure.local_dependency_depth == 201
+
+
+def test_analysis_stays_linear_in_the_number_of_steps():
+    """Guard against the quadratic dependency walk coming back.
+
+    The first implementation regex-searched every earlier step name in
+    every step's justification, which measured 177ms at 400 steps and
+    would be ~4.4s here. The linear version is ~30ms, so a 1.5s bound
+    separates the two cleanly while leaving a wide margin for slow CI.
+    A degenerate model emitting thousands of `have`s is exactly the input
+    that has to stay cheap.
+    """
+    import time
+
+    proof = _chained_proof(2000)
+    started = time.perf_counter()
+    structure = analyze_proof(proof)
+    elapsed = time.perf_counter() - started
+    assert structure.named_steps == 2000
+    assert elapsed < 1.5, "analyze_proof took %.2fs on 2000 steps; it may be quadratic again" % elapsed
+
+
 def test_counts_comment_segments_separately_by_kind():
     source = "/-- doc -/\n/- block -/\ntheorem t : True := by\n  -- line one\n  trivial -- line two"
     structure = analyze_proof(source)
