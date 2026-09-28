@@ -291,7 +291,9 @@ def _fill_repetition(structure: ProofStructure, body: str, language: str) -> Non
         structure.distinct_code_lines = len(set(stripped_lines))
         structure.line_repetition_rate = 1.0 - structure.distinct_code_lines / len(stripped_lines)
         run = best_run = 1
-        for previous, current in zip(stripped_lines, stripped_lines[1:]):
+        # strict=False on purpose: pairing a list with its own tail is
+        # meant to be one element shorter.
+        for previous, current in zip(stripped_lines, stripped_lines[1:], strict=False):
             run = run + 1 if current == previous else 1
             best_run = max(best_run, run)
         structure.max_consecutive_duplicate_lines = best_run if best_run > 1 else 0
