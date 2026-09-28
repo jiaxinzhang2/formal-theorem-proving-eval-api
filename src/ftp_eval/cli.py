@@ -57,8 +57,8 @@ def _parse_ks(text: str) -> list[int]:
             continue
         try:
             k = int(part)
-        except ValueError:
-            raise SystemExit("bad --k value %r, expected integers like 1,5,10" % part)
+        except ValueError as exc:
+            raise SystemExit("bad --k value %r, expected integers like 1,5,10" % part) from exc
         if k < 1:
             raise SystemExit("--k values must be >= 1")
         ks.append(k)

@@ -230,8 +230,13 @@ class Verifier(abc.ABC):
         """
         return SoundnessReport()
 
-    def close(self) -> None:
-        """Release any long-lived process or session. Idempotent."""
+    def close(self) -> None:  # noqa: B027 - an optional hook, not an abstract method
+        """Release any long-lived process or session. Idempotent.
+
+        Deliberately concrete and empty: most backends spawn a fresh
+        process per attempt and have nothing to release, so requiring
+        them to implement this would be noise.
+        """
 
     # -- the method callers use ---------------------------------------
 
