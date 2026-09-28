@@ -1,0 +1,370 @@
+"""Command line interface: ``ftp-eval``.
+
+Subcommands
+-----------
+``backends``  list backends and whether each can run here
+``doctor``    diagnose one backend in detail, with an exit code CI can use
+``verify``    run a task set against a backend, streaming results to JSONL
+``score``     turn a results file into pass@k and a breakdown
+``compare``   rank several results files side by side
+``preview``   print the exact source a backend would be handed
+
+Only argparse is used, so the CLI works in a bare virtualenv.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import sys
+from pathlib import Path
+from typing import Any, Sequence
+
+from . import __version__
+from .dataset import load_attempts, load_results, load_tasks
+from .metrics import compare as compare_summaries, summarize
+from .registry import available, create
+from .runner import EvalRunner, ProgressEvent, RunConfig
+from .types import ProofAttempt, ProofTask, Status
+from .verifier import assemble_source, screen_soundness
+
+EXIT_OK = 0
+EXIT_USAGE = 2
+EXIT_BACKEND_UNAVAILABLE = 3
+EXIT_RUN_HAD_ERRORS = 4
+EXIT_UNSOUND = 5
+
+
+def _parse_backend_config(pairs: Sequence[str]) -> dict[str, Any]:
+    """Parse ``-o key=value`` options, JSON-decoding values when possible."""
+    config: dict[str, Any] = {}
+    for pair in pairs:
+        if "=" not in pair:
+            raise SystemExit("bad -o option %r, expected key=value" % pair)
+        key, _, value = pair.partition("=")
+        try:
+            config[key.strip()] = json.loads(value)
+        except json.JSONDecodeError:
+            config[key.strip()] = value
+    return config
+
+
+def _parse_ks(text: str) -> list[int]:
+    ks = []
+    for part in text.split(","):
+        part = part.strip()
+        if not part:
+            continue
+        try:
+            k = int(part)
+        except ValueError:
+            raise SystemExit("bad --k value %r, expected integers like 1,5,10" % part)
+        if k < 1:
+            raise SystemExit("--k values must be >= 1")
+        ks.append(k)
+    return ks or [1]
+
+
+# -- subcommands ------------------------------------------------------
+
+
+def cmd_backends(args: argparse.Namespace) -> int:
+    rows = []
+    for name in available():
+        try:
+            info = create(name, **_parse_backend_config(args.option)).info()
+            rows.append(info.to_dict())
+        except Exception as exc:
+            rows.append(
+                {
+                    "name": name,
+                    "language": "?",
+                    "available": False,
+                    "version": None,
+                    "detail": "%s: %s" % (type(exc).__name__, exc),
+                    "supports": [],
+                }
+            )
+    if args.json:
+        print(json.dumps(rows, indent=2))
+        return EXIT_OK
+    print("%-10s %-10s %-11s %s" % ("backend", "language", "available", "detail"))
+    for row in rows:
+        print(
+            "%-10s %-10s %-11s %s"
+            % (
+                row["name"],
+                row["language"],
+                "yes" if row["available"] else "NO",
+                row.get("version") or row.get("detail") or "",
+            )
+        )
+    return EXIT_OK
+
+
+def cmd_doctor(args: argparse.Namespace) -> int:
+    backend = create(args.backend, **_parse_backend_config(args.option))
+    info = backend.info()
+    print("backend:   %s" % info.name)
+    print("language:  %s" % info.language)
+    print("available: %s" % ("yes" if info.available else "NO"))
+    if info.version:
+        print("version:   %s" % info.version)
+    if info.detail:
+        print("detail:    %s" % info.detail)
+    if info.supports:
+        print("supports:  %s" % ", ".join(info.supports))
+    if not info.available:
+        print("\nThis backend cannot run here. Fix the detail above and re-run.", file=sys.stderr)
+        return EXIT_BACKEND_UNAVAILABLE
+
+    if args.smoke:
+        # A backend that says it is available but cannot tell a good proof
+        # from a bad one is worse than one that says it is broken, so the
+        # smoke test checks both directions.
+        print("\nsmoke test:")
+        good = ProofTask(
+            task_id="smoke_ok",
+            header="",
+            formal_statement="MOCK_PASS",
+            language=info.language,
+        )
+        good_result = backend.verify(good, ProofAttempt(task_id="smoke_ok", proof="MOCK_PASS"))
+        bad_result = backend.verify(
+            ProofTask(task_id="smoke_bad", formal_statement="MOCK_FAIL", language=info.language),
+            ProofAttempt(task_id="smoke_bad", proof="MOCK_FAIL"),
+        )
+        print("  accepts a passing fixture: %s" % good_result.status.value)
+        print("  rejects a failing fixture: %s" % bad_result.status.value)
+        if good_result.status is not Status.VERIFIED or bad_result.status is Status.VERIFIED:
+            print(
+                "  smoke test is only meaningful for the mock backend; for a real prover "
+                "supply your own known-good and known-bad fixtures with `verify`.",
+                file=sys.stderr,
+            )
+    return EXIT_OK
+
+
+def cmd_verify(args: argparse.Namespace) -> int:
+    backend = create(args.backend, **_parse_backend_config(args.option))
+    info = backend.info()
+    if not info.available:
+        print("backend %r is unavailable: %s" % (info.name, info.detail), file=sys.stderr)
+        return EXIT_BACKEND_UNAVAILABLE
+
+    tasks = load_tasks(args.tasks, language=args.language)
+    attempts = load_attempts(args.attempts)
+    if args.task_id:
+        wanted = set(args.task_id)
+        tasks = [t for t in tasks if t.task_id in wanted]
+        attempts = [a for a in attempts if a.task_id in wanted]
+    if args.limit:
+        tasks = tasks[: args.limit]
+        keep = {t.task_id for t in tasks}
+        attempts = [a for a in attempts if a.task_id in keep]
+    if not tasks:
+        print("no tasks to run after filtering", file=sys.stderr)
+        return EXIT_USAGE
+
+    config = RunConfig(
+        timeout_s=args.timeout,
+        concurrency=args.concurrency,
+        cache_dir=args.cache_dir,
+        resume=args.resume,
+        limit_samples=args.limit_samples,
+    )
+
+    quiet = args.quiet
+
+    def on_progress(event: ProgressEvent) -> None:
+        if not quiet:
+            # Straight to stderr, unbuffered-ish: a two-hour run should
+            # show what it is doing while it does it.
+            print(event.format_line(), file=sys.stderr, flush=True)
+
+    runner = EvalRunner(backend, config, on_progress=on_progress)
+    try:
+        results = runner.run(tasks, attempts, out_path=args.out)
+    finally:
+        backend.close()
+
+    summary = summarize(results, ks=_parse_ks(args.k), include_per_task=bool(args.per_task_out))
+    print()
+    print(summary.format_text())
+
+    if args.summary_out:
+        Path(args.summary_out).write_text(
+            json.dumps(summary.to_dict(), indent=2, ensure_ascii=False), encoding="utf-8"
+        )
+        print("summary written to %s" % args.summary_out, file=sys.stderr)
+    if args.per_task_out:
+        Path(args.per_task_out).write_text(
+            "\n".join(json.dumps(o.to_dict(), ensure_ascii=False) for o in summary.per_task) + "\n",
+            encoding="utf-8",
+        )
+        print("per-task outcomes written to %s" % args.per_task_out, file=sys.stderr)
+
+    if summary.rejected and args.strict:
+        return EXIT_UNSOUND
+    if summary.errored and args.strict:
+        return EXIT_RUN_HAD_ERRORS
+    return EXIT_OK
+
+
+def cmd_score(args: argparse.Namespace) -> int:
+    results = load_results(args.results)
+    summary = summarize(results, ks=_parse_ks(args.k), include_per_task=args.unsolved)
+    if args.json:
+        print(json.dumps(summary.to_dict(), indent=2, ensure_ascii=False))
+    else:
+        print(summary.format_text())
+        if args.unsolved:
+            unsolved = [o for o in summary.per_task if not o.solved]
+            if unsolved:
+                print("\nunsolved tasks (%d):" % len(unsolved))
+                for o in unsolved:
+                    print(
+                        "  %-30s samples=%-3d %s"
+                        % (o.task_id, o.samples, o.first_error_kind.value if o.first_error_kind else "")
+                    )
+    if args.strict and not summary.integrity_ok:
+        return EXIT_UNSOUND if summary.rejected else EXIT_RUN_HAD_ERRORS
+    return EXIT_OK
+
+
+def cmd_compare(args: argparse.Namespace) -> int:
+    summaries = {}
+    ks = _parse_ks(args.k)
+    for spec in args.results:
+        name, _, path = spec.partition("=")
+        if not path:
+            name, path = Path(spec).stem, spec
+        summaries[name] = summarize(load_results(path), ks=ks)
+    print(compare_summaries(summaries, k=ks[0]))
+    return EXIT_OK
+
+
+def cmd_preview(args: argparse.Namespace) -> int:
+    tasks = {t.task_id: t for t in load_tasks(args.tasks, language=args.language)}
+    attempts = load_attempts(args.attempts)
+    shown = 0
+    for attempt in attempts:
+        if args.task_id and attempt.task_id not in set(args.task_id):
+            continue
+        task = tasks.get(attempt.task_id)
+        if task is None:
+            continue
+        source = assemble_source(task, attempt)
+        report = screen_soundness(task, attempt, source)
+        print("=" * 72)
+        print("# %s (%s, assembly=%s)" % (attempt.attempt_id, task.language, task.assembly.value))
+        if not report.ok:
+            print("# SOUNDNESS: " + "; ".join(report.violations))
+        print("=" * 72)
+        print(source)
+        shown += 1
+        if args.limit and shown >= args.limit:
+            break
+    if not shown:
+        print("nothing matched", file=sys.stderr)
+        return EXIT_USAGE
+    return EXIT_OK
+
+
+# -- parser -----------------------------------------------------------
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="ftp-eval",
+        description="Evaluate formal theorem-proving models through one verifier API.",
+    )
+    parser.add_argument("--version", action="version", version="ftp-eval %s" % __version__)
+    sub = parser.add_subparsers(dest="command", required=True)
+
+    def add_backend_opts(p: argparse.ArgumentParser) -> None:
+        p.add_argument("-b", "--backend", default="mock", help="backend name (default: mock)")
+        p.add_argument(
+            "-o",
+            "--option",
+            action="append",
+            default=[],
+            metavar="KEY=VALUE",
+            help="backend option; values are JSON-decoded when possible (repeatable)",
+        )
+
+    p_backends = sub.add_parser("backends", help="list backends and their availability")
+    p_backends.add_argument("-o", "--option", action="append", default=[], metavar="KEY=VALUE")
+    p_backends.add_argument("--json", action="store_true")
+    p_backends.set_defaults(func=cmd_backends)
+
+    p_doctor = sub.add_parser("doctor", help="diagnose one backend")
+    add_backend_opts(p_doctor)
+    p_doctor.add_argument("--smoke", action="store_true", help="also run a pass/fail fixture pair")
+    p_doctor.set_defaults(func=cmd_doctor)
+
+    p_verify = sub.add_parser("verify", help="verify attempts against tasks")
+    add_backend_opts(p_verify)
+    p_verify.add_argument("--tasks", required=True, help="tasks .jsonl/.json")
+    p_verify.add_argument("--attempts", required=True, help="attempts .jsonl/.json")
+    p_verify.add_argument("--out", help="write results here as JSONL (streamed)")
+    p_verify.add_argument("--summary-out", help="write the summary here as JSON")
+    p_verify.add_argument("--per-task-out", help="write per-task outcomes here as JSONL")
+    p_verify.add_argument("--timeout", type=float, default=300.0, help="seconds per attempt")
+    p_verify.add_argument("-j", "--concurrency", type=int, default=1)
+    p_verify.add_argument("--cache-dir", help="reuse verdicts for identical (task, proof) pairs")
+    p_verify.add_argument("--resume", action="store_true", help="skip attempts already in --out")
+    p_verify.add_argument("--language", help="language for task records that omit it")
+    p_verify.add_argument("--task-id", action="append", help="only these task ids (repeatable)")
+    p_verify.add_argument("--limit", type=int, help="only the first N tasks")
+    p_verify.add_argument("--limit-samples", type=int, help="only the first N samples per task")
+    p_verify.add_argument("--k", default="1", help="pass@k values, e.g. 1,5,10")
+    p_verify.add_argument("--quiet", action="store_true", help="no per-attempt progress lines")
+    p_verify.add_argument(
+        "--strict",
+        action="store_true",
+        help="exit non-zero if any attempt was unsound or errored",
+    )
+    p_verify.set_defaults(func=cmd_verify)
+
+    p_score = sub.add_parser("score", help="score an existing results file")
+    p_score.add_argument("results")
+    p_score.add_argument("--k", default="1,5,10")
+    p_score.add_argument("--json", action="store_true")
+    p_score.add_argument("--unsolved", action="store_true", help="also list unsolved tasks")
+    p_score.add_argument("--strict", action="store_true")
+    p_score.set_defaults(func=cmd_score)
+
+    p_compare = sub.add_parser("compare", help="rank several results files")
+    p_compare.add_argument("results", nargs="+", metavar="[NAME=]PATH")
+    p_compare.add_argument("--k", default="1")
+    p_compare.set_defaults(func=cmd_compare)
+
+    p_preview = sub.add_parser("preview", help="print the assembled source, without verifying")
+    p_preview.add_argument("--tasks", required=True)
+    p_preview.add_argument("--attempts", required=True)
+    p_preview.add_argument("--task-id", action="append")
+    p_preview.add_argument("--language")
+    p_preview.add_argument("--limit", type=int, default=3)
+    p_preview.set_defaults(func=cmd_preview)
+
+    return parser
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    try:
+        return int(args.func(args))
+    except KeyboardInterrupt:
+        print("\ninterrupted", file=sys.stderr)
+        return 130
+    except (KeyError, ValueError, OSError) as exc:
+        # Configuration and data problems get a one-line message; a real
+        # bug still gets its traceback.
+        print("error: %s" % exc, file=sys.stderr)
+        return EXIT_USAGE
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -1,0 +1,69 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "formal-theorem-proving-eval-api"
+version = "0.1.0"
+description = "A unified verifier API for evaluating formal theorem-proving models (Lean 4 and pluggable backends)."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "Jiaxin Zhang" }]
+keywords = [
+  "theorem-proving",
+  "lean4",
+  "formal-verification",
+  "evaluation",
+  "benchmark",
+  "pass-at-k",
+]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Intended Audience :: Science/Research",
+  "License :: OSI Approved :: MIT License",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Topic :: Scientific/Engineering :: Mathematics",
+]
+# Intentionally empty: the core runs on the standard library alone, so a
+# verification run cannot break because of an unrelated dependency bump.
+dependencies = []
+
+[project.optional-dependencies]
+dev = ["pytest>=7.0", "mypy>=1.8", "ruff>=0.4"]
+
+[project.scripts]
+ftp-eval = "ftp_eval.cli:main"
+
+[project.entry-points."ftp_eval.backends"]
+# Bundled backends are resolved directly by the registry; this group is
+# here so third-party backends have a documented place to plug in.
+
+[project.urls]
+Homepage = "https://github.com/jiaxinzhang2/formal-theorem-proving-eval-api"
+Issues = "https://github.com/jiaxinzhang2/formal-theorem-proving-eval-api/issues"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+# Correctness rules only. pyupgrade (UP) is deliberately off: this code
+# uses %-formatting throughout, which is a style choice, not a defect.
+select = ["E", "F", "B"]
+ignore = ["E501"]
+
+[tool.mypy]
+python_version = "3.10"
+packages = ["ftp_eval"]
+warn_unused_ignores = true

@@ -1,0 +1,8 @@
+{"task_id": "nat_add_zero", "sample_index": 0, "model": "demo-model-a", "proof": " simp MOCK_PASS"}
+{"task_id": "nat_add_zero", "sample_index": 1, "model": "demo-model-a", "proof": " rfl MOCK_PASS"}
+{"task_id": "add_comm_two", "sample_index": 0, "model": "demo-model-a", "proof": " omega MOCK_PASS"}
+{"task_id": "add_comm_two", "sample_index": 1, "model": "demo-model-a", "proof": " ring_nf MOCK_UNSOLVED"}
+{"task_id": "sq_nonneg_real", "sample_index": 0, "model": "demo-model-a", "proof": " positivity MOCK_PASS"}
+{"task_id": "sq_nonneg_real", "sample_index": 1, "model": "demo-model-a", "proof": " nlinarith MOCK_FAIL"}
+{"task_id": "imo_style_hard", "sample_index": 0, "model": "demo-model-a", "proof": " sorry MOCK_PASS"}
+{"task_id": "imo_style_hard", "sample_index": 1, "model": "demo-model-a", "proof": " nlinarith [sq_nonneg n] MOCK_FAIL"}

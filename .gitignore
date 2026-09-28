@@ -1,0 +1,33 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.venv/
+venv/
+.eggs/
+
+# Tooling
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# This project's own output
+results*.jsonl
+summary*.json
+per-task*.jsonl
+.cache/
+.ftp_eval_cache/
+
+# Scratch files the Lean backend writes inside a Lean project
+.ftp_eval_tmp/
+*.olean
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

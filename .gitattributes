@@ -1,0 +1,6 @@
+# Keep line endings LF in the repository and in working copies. Lean and
+# JSONL fixtures are compared byte-for-byte in tests, and CI runs on Linux.
+* text=auto eol=lf
+
+*.png binary
+*.pdf binary
