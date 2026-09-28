@@ -137,6 +137,23 @@ class TacticStats:
     proofs_without_tactics: int = 0
     #: Distinct tactics per proof, averaged. A proxy for strategy variety.
     mean_distinct_per_proof: float = 0.0
+    #: What proofs *open* with. A strong strategy signal: a model that
+    #: always opens `intro` is doing something different from one that
+    #: opens `simp`.
+    first_tactics: dict[str, int] = field(default_factory=dict)
+    #: What proofs *close* with -- which tactic actually discharges goals.
+    closing_tactics: dict[str, int] = field(default_factory=dict)
+    #: Ordered pairs, ``"simp->omega"`` -> count. The proof's strategy
+    #: shape rather than its ingredient list; two models with identical
+    #: frequency tables can have completely different transitions.
+    transitions: dict[str, int] = field(default_factory=dict)
+    #: Same, restricted to verified proofs, so a transition that works can
+    #: be told from one that merely occurs.
+    transitions_verified: dict[str, int] = field(default_factory=dict)
+    #: tactic -> mean normalized position in the proof (0 = start, 1 = end).
+    mean_position: dict[str, float] = field(default_factory=dict)
+    #: Invocations per proof, averaged.
+    mean_invocations_per_proof: float = 0.0
 
     def success_rate(self, tactic: str) -> float | None:
         """Fraction of proofs using ``tactic`` that verified.
@@ -158,11 +175,27 @@ class TacticStats:
         """Counts for tactics that bear on soundness, if any appear."""
         return {t: self.proofs_using[t] for t in sorted(_SUSPECT_TACTICS) if t in self.proofs_using}
 
+    def top_transitions(self, limit: int = 15) -> list[tuple[str, int]]:
+        return sorted(self.transitions.items(), key=lambda kv: (-kv[1], kv[0]))[:limit]
+
+    def transition_success_rate(self, transition: str) -> float | None:
+        """Fraction of a transition's occurrences that are in verified proofs."""
+        total = self.transitions.get(transition)
+        if not total:
+            return None
+        return self.transitions_verified.get(transition, 0) / total
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "proofs_measured": self.proofs_measured,
             "proofs_without_tactics": self.proofs_without_tactics,
             "mean_distinct_per_proof": round(self.mean_distinct_per_proof, 3),
+            "mean_invocations_per_proof": round(self.mean_invocations_per_proof, 3),
+            "first_tactics": self.first_tactics,
+            "closing_tactics": self.closing_tactics,
+            "transitions": self.transitions,
+            "transitions_verified": self.transitions_verified,
+            "mean_position": {k: round(v, 4) for k, v in self.mean_position.items()},
             "total": self.total,
             "proofs_using": self.proofs_using,
             "in_verified": self.in_verified,
@@ -198,7 +231,24 @@ class TacticStats:
         remaining = len(self.total) - min(limit, len(self.total))
         if remaining > 0:
             lines.append("  ... and %d more distinct tactic(s)" % remaining)
-        lines.append("  mean distinct tactics per proof: %.2f" % self.mean_distinct_per_proof)
+        lines.append(
+            "  per proof: %.2f distinct, %.2f invocations"
+            % (self.mean_distinct_per_proof, self.mean_invocations_per_proof)
+        )
+        if self.first_tactics:
+            ranked = sorted(self.first_tactics.items(), key=lambda kv: -kv[1])[:6]
+            lines.append("  opens with:  " + ", ".join("%s=%d" % kv for kv in ranked))
+        if self.closing_tactics:
+            ranked = sorted(self.closing_tactics.items(), key=lambda kv: -kv[1])[:6]
+            lines.append("  closes with: " + ", ".join("%s=%d" % kv for kv in ranked))
+        if self.transitions:
+            lines.append("  most common transitions:")
+            for transition, count in self.top_transitions(8):
+                rate = self.transition_success_rate(transition)
+                lines.append(
+                    "    %-28s %5d  %s"
+                    % (transition, count, "n/a" if rate is None else "%5.1f%% verified" % (100 * rate))
+                )
         if self.suspect_usage:
             lines.append(
                 "  NOTE soundness-relevant tactics present: "
@@ -221,7 +271,14 @@ def tactic_stats(
     proofs_using: Counter[str] = Counter()
     in_verified: Counter[str] = Counter()
     in_failed: Counter[str] = Counter()
+    first_tactics: Counter[str] = Counter()
+    closing_tactics: Counter[str] = Counter()
+    transitions: Counter[str] = Counter()
+    transitions_verified: Counter[str] = Counter()
+    position_sum: dict[str, float] = {}
+    position_count: Counter[str] = Counter()
     distinct_counts: list[int] = []
+    invocation_counts: list[int] = []
 
     for tactics, verified, scoreable in entries:
         stats.proofs_measured += 1
@@ -229,17 +286,42 @@ def tactic_stats(
         if not unique:
             stats.proofs_without_tactics += 1
         distinct_counts.append(len(unique))
+        invocation_counts.append(len(tactics))
         total.update(tactics)
         proofs_using.update(unique)
         if scoreable:
             (in_verified if verified else in_failed).update(unique)
 
+        if tactics:
+            first_tactics[tactics[0]] += 1
+            closing_tactics[tactics[-1]] += 1
+            # Normalized position: 0 for the first tactic, 1 for the last.
+            span = max(1, len(tactics) - 1)
+            for index, name in enumerate(tactics):
+                position_sum[name] = position_sum.get(name, 0.0) + index / span
+                position_count[name] += 1
+            for before, after in zip(tactics, tactics[1:], strict=False):
+                key = "%s->%s" % (before, after)
+                transitions[key] += 1
+                if scoreable and verified:
+                    transitions_verified[key] += 1
+
     stats.total = dict(total)
     stats.proofs_using = dict(proofs_using)
     stats.in_verified = dict(in_verified)
     stats.in_failed = dict(in_failed)
+    stats.first_tactics = dict(first_tactics)
+    stats.closing_tactics = dict(closing_tactics)
+    stats.transitions = dict(transitions)
+    stats.transitions_verified = dict(transitions_verified)
+    stats.mean_position = {
+        name: position_sum[name] / position_count[name] for name in position_sum
+    }
     stats.mean_distinct_per_proof = (
         sum(distinct_counts) / len(distinct_counts) if distinct_counts else 0.0
+    )
+    stats.mean_invocations_per_proof = (
+        sum(invocation_counts) / len(invocation_counts) if invocation_counts else 0.0
     )
     return stats
 

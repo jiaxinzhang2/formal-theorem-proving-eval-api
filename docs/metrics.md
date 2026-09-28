@@ -89,11 +89,53 @@ from what a typical proof looks like.
 `proofs_using` | Number of proofs containing it at least once |
 `in_verified` / `in_failed` | The same split by outcome |
 `success_rate` | Fraction of proofs using it that verified. An **association**, not a causal claim — `omega` looking good may only mean it gets pointed at easy arithmetic |
-`mean_distinct_per_proof` | Strategy variety |
+`first_tactics` | What proofs **open** with |
+`closing_tactics` | What proofs **close** with — which tactic actually discharges goals |
+`transitions` | Ordered pairs (`simp->omega`), with a verified-only variant. The strategy *shape* rather than the ingredient list: two models with identical frequency tables can have completely different transitions |
+`mean_position` | Per tactic, mean normalized position in the proof (0 = start, 1 = end) |
+`mean_distinct_per_proof`, `mean_invocations_per_proof` | Strategy variety and verbosity |
 `suspect_usage` | Counts for `sorry` / `admit` / `native_decide` |
 
 A model that solves 40% with `nlinarith` alone is a different result from
 one that solves 40% with twenty tactics.
+
+## 5b. What carries signal
+
+The reason for collecting this many metrics is to find which ones matter.
+`Summary.correlations` does that search once per run: point-biserial
+correlation between every numeric metric and pass/fail, ranked by
+magnitude, with metrics below |r| = 0.1 dropped so the table stays
+readable. Each row reports `r`, `n`, and the metric's mean among passes
+vs failures.
+
+Also aggregated for slicing: `by_model` (per-model rollup, so one results
+file can hold a comparison), `by_split`, `by_sample_index`, and
+`samples_to_first_success` (a low median means extra samples are mostly
+wasted).
+
+**These are associations.** A metric can track success because it tracks
+task difficulty — `named_steps` correlating with failure may only mean
+hard problems get long attempts. Treat a row as a pointer at something to
+look at, not a finding. The report says so too.
+
+## 5c. Statement complexity
+
+Recorded on every result as `statement_*`, so solve rate can be correlated
+against it — the closest thing to a difficulty axis available without
+human labels.
+
+| metric | meaning |
+|---|---|
+`statement_binders` | Total binders, plus `implicit_binders` and `instance_binders` |
+`statement_hypotheses` | Binders whose type looks like a proposition |
+`statement_conclusion_tokens` | Size of the goal itself, separate from its context |
+`statement_quantifiers`, `statement_connectives` | `∀ ∃` and `∧ ∨ → ↔ ¬` counts |
+`statement_cited_definitions` | Distinct qualified names the statement mentions |
+`statement_distinct_types` | How many domains are in play at once |
+`statement_total_tokens`, `statement_max_nesting_depth` | Overall size and depth |
+
+Surface complexity, not mathematical depth — a short statement can be an
+open problem. A proxy, not a difficulty score.
 
 ## 6. Repetition
 
@@ -140,14 +182,70 @@ complex one.
 `judge_usage` | Judge tokens in/out, cache reads, call count |
 `estimated_cost_usd` | **An estimate** from a local price table, labelled as such everywhere. Tokens are measured; dollars are not. Verify against billing before quoting |
 
-## 9. Error analysis
+## 9. Failure modes
+
+`error_kind` is coarse on purpose, so it means the same thing across
+provers. `failure_mode` is the Lean-specific detail, because the coarse
+version hides the distinctions that decide what to fix.
 
 | metric | meaning |
 |---|---|
 `error_kind` | `syntax`, `type`, `unknown_identifier`, `unsolved_goals`, `tactic_failed`, `incomplete`, `timeout`, `resource_limit`, `soundness`, `toolchain`, `harness`, `unknown` |
-`error_kinds` | Histogram over the run |
-`diagnostics` | Per attempt: severity, message, line, column. For Lean, the goal state under an "unsolved goals" error stays attached to it |
-`per_task.first_error_kind` | What each task failed on first |
+`failure_mode` | One of ~35 specific modes, grouped below |
+`attributions` | `model` / `budget` / `harness` / `soundness` — **whose problem it is** |
+`budget_fraction` | Share of failures that are budget, not capability. Above ~10% the headline is measuring your harness |
+`invented_names` | The lemma names the model made up, ranked. Directly useful for prompt work, retrieval, or spotting a Mathlib version mismatch |
+`mean_first_error_position` | Where in the proof the first error lands, normalized. Near 0 = breaks immediately; near 1 = gets most of the way and fails at the last step |
+`diagnostics` | Severity, message, line, column. The goal state under an "unsolved goals" error stays attached to it |
+
+Mode groups: **syntax/truncation** (`truncated_output`, `unexpected_token`,
+`incomplete_syntax`, `bad_indentation`, `empty_proof`) · **name
+resolution** (`unknown_lemma`, `unknown_tactic`, `unknown_namespace`,
+`ambiguous_name`) · **elaboration** (`type_mismatch`,
+`application_mismatch`, `missing_instance`, `function_expected`,
+`unresolved_metavariable`, `motive_not_type_correct`, `universe_issue`,
+`numeral_type`) · **automation gave up** (`linarith_failed`,
+`nlinarith_failed`, `omega_failed`, `simp_no_progress`,
+`rw_pattern_not_found`, `decide_failed`, `positivity_failed`,
+`ring_failed`, `aesop_failed`, `norm_num_failed`, `apply_failed`,
+`exact_type_mismatch`, `other_tactic_failed`) · **incomplete**
+(`unsolved_goals`, `placeholder_left`) · **resource**
+(`heartbeat_exceeded`, `recursion_depth`, `wall_clock_timeout`,
+`out_of_memory`) · **not the model** (`reward_hacking`,
+`toolchain_error`, `harness_error`, `language_mismatch`).
+
+Three distinctions worth the separate modes:
+
+* **`truncated_output` vs `unexpected_token`.** A cut-off completion
+  produces a syntax error. Reading that as "the model writes bad Lean"
+  turns a `max_tokens` setting into a capability claim, so truncation is
+  detected first — from `unexpected end of input`, unbalanced brackets, or
+  an ending on a connector — and attributed to `budget`.
+* **`unknown_lemma` vs `type_mismatch`.** One means the model invented
+  `Nat.add_le_of_lt_succ`; the other means it misread the goal.
+* **Which automation ran out of road.** `linarith_failed` and
+  `simp_no_progress` are the same `tactic_failed` to `ErrorKind`, and
+  which one it is is the most actionable fact about a failing benchmark.
+
+## 10. Success modes
+
+A verified proof still has a shape, and the shape is most of what you
+learn from it. "Solved 40%" means something different when 90% of solves
+are one `omega` call.
+
+| metric | meaning |
+|---|---|
+`success_mode` | `one_liner_automation`, `brute_force_decide`, `term_mode`, `short_tactic_chain`, `long_tactic_chain`, `structured_with_steps`, `calc_chain`, `case_analysis`, `induction`, `auxiliary_lemmas` |
+`automation_fraction` | Share of passes closed by automation alone |
+`substantive_fraction` | Share that did structural work — cases, induction, named steps, helper lemmas |
+`by_model` | The same distribution per model |
+
+Assigned by the most structurally demanding feature present, so a proof
+with both `induction` and a `calc` chain reports the induction. Not a
+quality ranking: a one-line `omega` is the *right* proof for an arithmetic
+goal. It is a description, so two models with the same pass rate can be
+told apart — and so you notice a benchmark drifting into a computation
+exercise as `brute_force_decide` climbs.
 
 ---
 
@@ -203,6 +301,7 @@ Stated so that nothing here looks more capable than it is.
   that are the same idea in different syntax read as distinct.
 * **Compression vs a reference proof.** Would need gold proofs, which the
   dataset format does not require.
-* **Tactic transition probabilities** (which tactic follows which). The
-  per-attempt `tactics` list is ordered, so this is computable downstream;
-  it is just not aggregated here.
+* **Statistical significance** on the correlations. No p-values, no
+  multiple-comparison correction, and with ~25 metrics scanned at once
+  some will correlate by chance. That is why the threshold is a magnitude
+  and the output is labelled a pointer rather than a result.

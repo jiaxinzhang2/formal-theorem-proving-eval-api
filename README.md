@@ -188,27 +188,47 @@ only interesting as the comparison. Full reference in
 
 | category | examples |
 |---|---|
-**Correctness** | unbiased pass@k, solve rate, per-split, pass rate by sample position |
+**Correctness** | unbiased pass@k, solve rate, per-split, per-model, pass rate by sample position, samples-to-first-success |
 **Soundness** | reward hacking by class and by specific trick, kernel axiom audit, `integrity_ok` |
 **Statement quality** | elaborates, non-trivial, non-vacuous, gold-equivalent, judge faithfulness |
+**Failure modes** | ~35 specific Lean modes, plus **attribution**: model vs budget vs harness vs soundness |
+**Success modes** | one-line automation / `decide` / term mode / short & long chains / structured steps / `calc` / cases / induction / helper lemmas |
 **Proof structure** | declarations by kind, auxiliary lemmas, named steps, local dependency depth, cited lemmas, nesting, branch points, term vs tactic mode |
-**Tactic usage** | frequency, distinct-per-proof, per-tactic success rate, soundness-relevant tactics |
+**Tactic usage** | frequency, opening & closing tactics, transition pairs, mean position, per-tactic success rate |
+**Statement complexity** | binders by kind, hypotheses, conclusion size, quantifiers, connectives, distinct types |
 **Repetition** | line / tactic / trigram repetition, consecutive duplicates, and duplication *across* the k samples |
 **Comments** | segments by kind, doc comments, chars, ratio |
 **Cost** | Lean compile time (separate from wall time), harness overhead, seconds per solved task, judge tokens and estimated cost |
-**Errors** | error-kind histogram, per-task first failure, parsed diagnostics with positions |
+**Signal search** | correlation of every numeric metric with pass/fail, ranked |
 
 Everything is aggregated as distributions (mean / median / p25 / p75 / p90
 / max / stdev) and split verified vs failed. Percentiles sit next to the
 mean because these are skewed: a few enormous proofs drag a mean away from
 what a typical proof looks like.
 
-Two deliberate refusals. **Cross-sample duplication** is reported because
-pass@k assumes k independent draws — if a model returns the same text five
-times the real sample size is one, and the report says so rather than
-quoting a precision the data lacks. And **global dependency depth** through
-the library is *not* computed, because it needs the prover's environment;
-only the honest local subset is.
+Three of these earn their place by catching things a pass rate cannot:
+
+* **Attribution.** "40% of failures were truncated output" is an
+  instruction to raise `max_tokens`, not a capability result. Truncation
+  is detected before the syntax patterns, because a cut-off completion
+  *produces* a syntax error and reading that as "writes bad Lean" turns a
+  budget setting into a claim about the model.
+* **Success modes.** Two models at the same pass rate, one closing 90% of
+  goals with a single `omega` and the other writing structured multi-step
+  arguments, are not equally good — and the pass rate cannot say so.
+* **Cross-sample duplication.** pass@k assumes k independent draws. If a
+  model returns the same text five times the real sample size is one, and
+  the report says so rather than quoting a precision the data lacks.
+
+And two deliberate refusals: **global dependency depth** through the
+library is not computed (it needs the prover's environment; only the local
+subset is honest), and the correlation table carries **no p-values** — with
+~25 metrics scanned at once some will correlate by chance, so it is
+labelled a pointer, not a finding.
+
+Measured cost of all of the above: **0.16 ms per attempt**, against Lean
+compile times of seconds to minutes. See
+[docs/metrics.md](docs/metrics.md#cost-of-measuring).
 
 ## Judges
 

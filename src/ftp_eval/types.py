@@ -285,6 +285,16 @@ class VerificationResult:
     #: attempt, including failures and timeouts: how a model fails is as
     #: informative as how it succeeds, and comparing the two is the point.
     structure: Mapping[str, Any] = field(default_factory=dict)
+    #: Fine-grained failure classification (see :mod:`ftp_eval.modes`).
+    #: Set for every non-verified attempt, ``None`` for a pass. Finer than
+    #: ``error_kind``: it separates a hallucinated lemma name from a real
+    #: type error, and a truncated completion from bad Lean.
+    failure_mode: str | None = None
+    #: The *shape* of a verified proof (one-liner automation, induction,
+    #: structured steps, ...). ``None`` for a failure. Exists because
+    #: "solved 40%" with one-line automation is a different result from
+    #: "solved 40%" with multi-step arguments.
+    success_mode: str | None = None
     #: Untouched backend payload (stdout, exit code, HTTP body, ...).
     raw: Mapping[str, Any] = field(default_factory=dict)
 
@@ -311,6 +321,8 @@ class VerificationResult:
             "cached": self.cached,
             "tactics": list(self.tactics),
             "structure": dict(self.structure),
+            "failure_mode": self.failure_mode,
+            "success_mode": self.success_mode,
             "raw": dict(self.raw),
         }
 
@@ -348,6 +360,8 @@ class VerificationResult:
             cached=bool(d.get("cached", False)),
             tactics=tuple(d.get("tactics") or ()),
             structure=dict(d.get("structure") or {}),
+            failure_mode=d.get("failure_mode"),
+            success_mode=d.get("success_mode"),
             raw=dict(d.get("raw") or {}),
         )
 

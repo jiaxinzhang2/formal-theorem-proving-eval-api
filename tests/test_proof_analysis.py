@@ -175,6 +175,18 @@ def test_detects_term_mode_proofs():
     assert not analyze_proof("by simp").term_mode
 
 
+def test_a_bare_tactic_fragment_is_not_term_mode():
+    """Under `continue_statement` the `by` is in the statement, not here.
+
+    Judging term-mode on the absence of `by` labelled every ordinary
+    tactic proof in that convention as term-mode, which then showed up as
+    a bogus success-mode distribution.
+    """
+    assert not analyze_proof(" simp").term_mode
+    assert not analyze_proof(" nlinarith [sq_nonneg n]").term_mode
+    assert not analyze_proof("\n  intro h\n  omega").term_mode
+
+
 def test_measures_nesting_and_branching():
     structure = analyze_proof("by\n  rcases h with ⟨a, b⟩\n  by_cases hx : a = b\n  · simp\n  · omega")
     assert structure.max_nesting_depth >= 1
@@ -297,6 +309,215 @@ def test_failed_attempts_are_measured_too():
     assert result.status is Status.FAILED
     assert result.tactics == ("simp",)
     assert result.structure["chars"] > 0
+
+
+# -- tactic sequence signal -------------------------------------------
+
+
+def test_records_opening_and_closing_tactics():
+    stats = tactic_stats(
+        [
+            (("intro", "simp", "omega"), True, True),
+            (("intro", "nlinarith"), False, True),
+        ]
+    )
+    assert stats.first_tactics == {"intro": 2}
+    assert stats.closing_tactics == {"omega": 1, "nlinarith": 1}
+
+
+def test_records_transitions_split_by_outcome():
+    stats = tactic_stats(
+        [
+            (("simp", "omega"), True, True),
+            (("simp", "omega"), False, True),
+            (("simp", "linarith"), False, True),
+        ]
+    )
+    assert stats.transitions == {"simp->omega": 2, "simp->linarith": 1}
+    assert stats.transitions_verified == {"simp->omega": 1}
+    assert stats.transition_success_rate("simp->omega") == pytest.approx(0.5)
+    assert stats.transition_success_rate("simp->linarith") == pytest.approx(0.0)
+    assert stats.transition_success_rate("never->seen") is None
+
+
+def test_mean_position_places_tactics_in_the_proof():
+    stats = tactic_stats([(("intro", "simp", "omega"), True, True)])
+    assert stats.mean_position["intro"] == pytest.approx(0.0)
+    assert stats.mean_position["omega"] == pytest.approx(1.0)
+    assert stats.mean_position["simp"] == pytest.approx(0.5)
+
+
+def test_transitions_appear_in_the_report():
+    stats = tactic_stats([(("intro", "simp"), True, True)] * 3)
+    text = stats.format_text()
+    assert "opens with" in text
+    assert "intro->simp" in text
+
+
+# -- statement complexity ---------------------------------------------
+
+
+def test_counts_binders_by_kind():
+    from ftp_eval.proof_metrics import analyze_statement
+
+    c = analyze_statement(
+        "theorem t {α : Type} [Ring α] (x : α) (h : 0 < x) : x + 0 = x := by"
+    )
+    assert c.binders == 4
+    assert c.implicit_binders == 1
+    assert c.instance_binders == 1
+    assert c.hypotheses == 1  # only `0 < x` looks like a proposition
+    assert c.distinct_types == 4
+
+
+def test_counts_quantifiers_and_connectives():
+    from ftp_eval.proof_metrics import analyze_statement
+
+    c = analyze_statement("theorem t : ∀ n, n = 0 ∨ 0 < n := by")
+    assert c.quantifiers == 1
+    assert c.connectives >= 1
+
+
+def test_measures_the_conclusion_separately_from_the_binders():
+    from ftp_eval.proof_metrics import analyze_statement
+
+    simple = analyze_statement("theorem t (n : Nat) : n = n := by")
+    complex_ = analyze_statement(
+        "theorem t (n : Nat) : n * n + 2 * n + 1 = (n + 1) * (n + 1) := by"
+    )
+    assert complex_.conclusion_tokens > simple.conclusion_tokens
+
+
+def test_statement_complexity_survives_an_unparseable_statement():
+    from ftp_eval.proof_metrics import analyze_statement
+
+    # Token and quantifier counts should still come through rather than
+    # the whole measurement returning nothing.
+    c = analyze_statement("theorem ∀∃ garbage ∧")
+    assert c.total_tokens > 0
+    assert c.quantifiers == 2
+
+
+def test_statement_complexity_travels_with_the_result():
+    from ftp_eval import ProofAttempt, ProofTask, create
+
+    backend = create("mock")
+    task = ProofTask(
+        task_id="t",
+        formal_statement="theorem t (n : Nat) (h : 0 < n) : n ^ 2 >= n := by",
+    )
+    result = backend.verify(task, ProofAttempt(task_id="t", proof=" nlinarith MOCK_PASS"))
+    assert result.structure["statement_binders"] == 2
+    assert result.structure["statement_hypotheses"] == 1
+
+
+# -- correlation ------------------------------------------------------
+
+
+def test_point_biserial_detects_a_clean_relationship():
+    from ftp_eval.proof_metrics import point_biserial
+
+    values = [1, 2, 3, 10, 11, 12]
+    outcomes = [True, True, True, False, False, False]
+    r = point_biserial(values, outcomes)
+    assert r is not None
+    assert r < -0.9  # high values go with failure
+
+
+def test_point_biserial_is_none_when_undefined():
+    from ftp_eval.proof_metrics import point_biserial
+
+    assert point_biserial([1, 2], [True, False]) is None          # too few points
+    assert point_biserial([5, 5, 5], [True, False, True]) is None  # no variation
+    assert point_biserial([1, 2, 3], [True, True, True]) is None   # no outcome variation
+
+
+def test_point_biserial_rejects_mismatched_lengths():
+    from ftp_eval.proof_metrics import point_biserial
+
+    with pytest.raises(ValueError):
+        point_biserial([1, 2, 3], [True, False])
+
+
+def test_correlations_are_ranked_by_magnitude():
+    from ftp_eval.proof_metrics import correlate_with_success
+
+    entries = []
+    for i in range(20):
+        verified = i < 10
+        entries.append(
+            ({"lines": 2 if verified else 40, "cited_lemmas": 3}, verified)
+        )
+    correlations = correlate_with_success(entries)
+    assert correlations
+    assert correlations[0].metric == "lines"
+    assert correlations[0].strength == "strong"
+    # A constant metric carries no signal and is dropped, not reported as 0.
+    assert "cited_lemmas" not in {c.metric for c in correlations}
+
+
+def test_correlation_report_states_the_causation_caveat():
+    from ftp_eval.proof_metrics import correlate_with_success, format_correlations
+
+    entries = [({"lines": 2 if i < 6 else 40}, i < 6) for i in range(12)]
+    text = format_correlations(correlate_with_success(entries))
+    assert "NOT causation" in text
+    assert "task difficulty" in text
+
+
+def test_empty_correlations_say_so():
+    from ftp_eval.proof_metrics import format_correlations
+
+    assert "none above" in format_correlations([])
+
+
+# -- per-model and sample-position rollups ----------------------------
+
+
+def _result(task_id, status, *, model=None, sample=0, structure=None):
+    return VerificationResult(
+        task_id=task_id,
+        attempt_id="%s#%d" % (task_id, sample),
+        backend="mock",
+        status=status,
+        model=model,
+        sample_index=sample,
+        structure=structure or {},
+    )
+
+
+def test_summary_breaks_down_by_model():
+    results = [
+        _result("a", Status.VERIFIED, model="strong"),
+        _result("b", Status.VERIFIED, model="strong"),
+        _result("a", Status.FAILED, model="weak"),
+        _result("b", Status.FAILED, model="weak"),
+    ]
+    summary = summarize(results, ks=(1,))
+    assert summary.by_model["strong"]["solve_rate"] == pytest.approx(1.0)
+    assert summary.by_model["weak"]["solve_rate"] == pytest.approx(0.0)
+    assert "by model:" in summary.format_text()
+
+
+def test_single_model_run_gets_no_by_model_noise():
+    results = [_result("a", Status.VERIFIED, model="only")]
+    assert summarize(results, ks=(1,)).by_model == {}
+
+
+def test_samples_to_first_success_is_one_based():
+    results = [
+        _result("a", Status.FAILED, sample=0),
+        _result("a", Status.FAILED, sample=1),
+        _result("a", Status.VERIFIED, sample=2),
+    ]
+    summary = summarize(results, ks=(1,))
+    # Third sample succeeded, so three samples were drawn.
+    assert summary.samples_to_first_success.median == pytest.approx(3.0)
+
+
+def test_unsolved_tasks_do_not_enter_samples_to_first_success():
+    results = [_result("a", Status.FAILED, sample=i) for i in range(3)]
+    assert summarize(results, ks=(1,)).samples_to_first_success.count == 0
 
 
 def test_result_round_trips_tactics_and_structure():

@@ -19,12 +19,23 @@ from collections import Counter, defaultdict
 from dataclasses import dataclass, field
 from typing import Any, Iterable, Mapping, Sequence
 
+from .modes import (
+    FailureMode,
+    FailureModeStats,
+    SuccessMode,
+    SuccessModeStats,
+    aggregate_failure_modes,
+    aggregate_success_modes,
+)
 from .proof_metrics import (
+    Correlation,
     Distribution,
     SampleDuplication,
     StructureStats,
     aggregate_structure,
+    correlate_with_success,
     distribution,
+    format_correlations,
     sample_duplication,
 )
 from .soundness import parse_label
@@ -157,6 +168,23 @@ class Summary:
     tactics: TacticStats = field(default_factory=TacticStats)
     structure: StructureStats = field(default_factory=StructureStats)
     duplication: SampleDuplication = field(default_factory=SampleDuplication)
+    #: Which structural metrics actually track success, ranked. The reason
+    #: for collecting many metrics is to find the ones that carry signal;
+    #: this is that search. Association, not causation.
+    #: Why failures failed, at the granularity that says what to fix, plus
+    #: the attribution cut (model vs budget vs harness).
+    failure_modes: FailureModeStats = field(default_factory=FailureModeStats)
+    #: What kind of proofs passed. Same pass rate, different shapes, is a
+    #: real difference between models and this is where it shows.
+    success_modes: SuccessModeStats = field(default_factory=SuccessModeStats)
+    correlations: list[Correlation] = field(default_factory=list)
+    #: Per-model rollup when a run mixes models, so one file can hold a
+    #: comparison rather than needing one file per model.
+    by_model: dict[str, dict[str, Any]] = field(default_factory=dict)
+    #: How many samples were drawn before the first success, over tasks
+    #: that were eventually solved. A low median means extra samples are
+    #: mostly wasted; a high one means k matters.
+    samples_to_first_success: Distribution = field(default_factory=Distribution)
     #: Reward-hacking classes seen, e.g. ``{"placeholder": 3, "new_axiom": 1}``.
     hack_classes: dict[str, int] = field(default_factory=dict)
     #: The specific trick, e.g. ``{"lean.sorry": 14, "kernel.sorry_ax": 2}``.
@@ -222,6 +250,8 @@ class Summary:
             "tactics": self.tactics.to_dict(),
             "structure": self.structure.to_dict(),
             "duplication": self.duplication.to_dict(),
+            "failure_modes": self.failure_modes.to_dict(),
+            "success_modes": self.success_modes.to_dict(),
             "integrity_ok": self.integrity_ok,
             "timing": {
                 "total_wall_time_s": round(self.total_wall_time_s, 3),
@@ -238,7 +268,10 @@ class Summary:
                 ),
             },
             "by_split": self.by_split,
+            "by_model": self.by_model,
             "by_sample_index": {str(k): round(v, 6) for k, v in self.by_sample_index.items()},
+            "correlations": [c.to_dict() for c in self.correlations],
+            "samples_to_first_success": self.samples_to_first_success.to_dict(),
         }
 
     def format_text(self, *, include_tactics: bool = False) -> str:
@@ -325,22 +358,60 @@ class Summary:
                 )
             )
         if self.duplication.undermines_pass_at_k and self.pass_at:
+            detail = (
+                "; %d task(s) returned k identical proofs" % self.duplication.tasks_all_identical
+                if self.duplication.tasks_all_identical
+                else ""
+            )
             lines.append(
-                "WARNING: samples are %.0f%% duplicated (%d task(s) returned k identical "
-                "proofs). pass@k assumes k independent draws, so the k>1 figures above "
-                "claim more precision than the data supports."
-                % (
-                    100 * self.duplication.mean_duplicate_fraction,
-                    self.duplication.tasks_all_identical,
+                "WARNING: %.0f%% of samples repeat another sample of the same task%s. "
+                "pass@k assumes k independent draws, so the k>1 figures above claim more "
+                "precision than the data supports."
+                % (100 * self.duplication.mean_duplicate_fraction, detail)
+            )
+        if self.by_model:
+            lines.append("by model:")
+            for model, stats in sorted(
+                self.by_model.items(), key=lambda kv: -kv[1]["solve_rate"]
+            ):
+                lines.append(
+                    "  %-24s solve=%5.1f%%  verified=%d/%d  rejected=%d"
+                    % (
+                        model[:24],
+                        100 * stats["solve_rate"],
+                        stats["verified"],
+                        stats["scoreable_attempts"],
+                        stats["rejected"],
+                    )
                 )
+        if self.samples_to_first_success.count:
+            d = self.samples_to_first_success
+            lines.append(
+                "samples drawn before first success: median %.1f, p90 %.1f, max %.0f "
+                "(over %d solved task(s))" % (d.median, d.p90, d.maximum, d.count)
+            )
+        if self.failure_modes.budget_fraction >= 0.10:
+            lines.append(
+                "WARNING: %.0f%% of failures are budget, not capability (truncation, "
+                "timeouts, heartbeat limits) -- see the failure-mode table."
+                % (100 * self.failure_modes.budget_fraction)
             )
         if include_tactics:
+            if self.failure_modes.failures:
+                lines.append("")
+                lines.append(self.failure_modes.format_text())
+            if self.success_modes.successes:
+                lines.append("")
+                lines.append(self.success_modes.format_text())
             if self.tactics.proofs_measured:
                 lines.append("")
                 lines.append(self.tactics.format_text())
             if self.structure.proofs:
                 lines.append("")
                 lines.append(self.structure.format_text())
+            if self.correlations:
+                lines.append("")
+                lines.append(format_correlations(self.correlations))
         return "\n".join(lines)
 
 
@@ -391,6 +462,11 @@ def summarize(
     compile_times_verified: list[float] = []
     by_index_total: Counter[int] = Counter()
     by_index_verified: Counter[int] = Counter()
+    correlation_entries: list[tuple[Mapping[str, Any], bool]] = []
+    failure_entries: list[tuple[FailureMode | None, Any, str | None, int, int]] = []
+    success_entries: list[tuple[SuccessMode | None, str | None]] = []
+    by_model_results: dict[str, list[VerificationResult]] = defaultdict(list)
+    first_success: dict[str, int] = {}
     by_split_results: dict[str, list[VerificationResult]] = defaultdict(list)
 
     for r in results:
@@ -447,9 +523,37 @@ def summarize(
         structure_entries.append(
             (r.structure, r.status is Status.VERIFIED, r.status.counts_toward_pass_rate)
         )
+        if r.status.counts_toward_pass_rate and r.structure:
+            correlation_entries.append((r.structure, r.status is Status.VERIFIED))
+        if r.model:
+            by_model_results[r.model].append(r)
+        if r.status is Status.VERIFIED:
+            best = first_success.get(r.task_id)
+            if best is None or r.sample_index < best:
+                first_success[r.task_id] = r.sample_index
         # Fingerprints stand in for proof text, which results do not carry.
         fingerprint = str((r.structure or {}).get("chars", "")) + "|" + "\u0000".join(r.tactics)
         samples_by_task.setdefault(r.task_id, []).append(fingerprint)
+        if r.failure_mode:
+            try:
+                mode: FailureMode | None = FailureMode(r.failure_mode)
+            except ValueError:
+                mode = FailureMode.UNCLASSIFIED
+            first_line = next((d.line for d in r.diagnostics if d.line), 0) or 0
+            failure_entries.append(
+                (
+                    mode,
+                    r.diagnostics,
+                    r.model,
+                    first_line,
+                    int((r.structure or {}).get("lines") or 0),
+                )
+            )
+        if r.success_mode:
+            try:
+                success_entries.append((SuccessMode(r.success_mode), r.model))
+            except ValueError:
+                success_entries.append((SuccessMode.UNCLASSIFIED, r.model))
         if r.split:
             by_split_results[r.split].append(r)
 
@@ -470,6 +574,27 @@ def summarize(
         for index, total in sorted(by_index_total.items())
         if total
     }
+    summary.failure_modes = aggregate_failure_modes(failure_entries)
+    summary.success_modes = aggregate_success_modes(success_entries)
+    summary.correlations = correlate_with_success(correlation_entries)
+    # sample_index is 0-based; "samples drawn" is one more than that.
+    summary.samples_to_first_success = distribution(
+        [index + 1 for index in first_success.values()]
+    )
+
+    if _split_depth == 0 and len(by_model_results) > 1:
+        for model, model_results in by_model_results.items():
+            sub = summarize(model_results, ks=ks, _split_depth=1)
+            summary.by_model[model] = {
+                "tasks": sub.tasks,
+                "verified": sub.verified,
+                "rejected": sub.rejected,
+                "errored": sub.errored,
+                "scoreable_attempts": sub.scoreable_attempts,
+                "solve_rate": round(sub.solve_rate, 6),
+                "integrity_ok": sub.integrity_ok,
+                "pass_at": {"pass@%d" % kk: round(vv, 6) for kk, vv in sorted(sub.pass_at.items())},
+            }
 
     for k in ks:
         value = pass_at_k(results, k)

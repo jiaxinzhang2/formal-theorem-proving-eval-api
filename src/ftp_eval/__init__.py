@@ -28,8 +28,23 @@ from .dataset import (
 )
 from .judge import ConsensusJudge, Judge, JudgeError, MockJudge
 from .metrics import Summary, estimate_pass_at_k, pass_at_k, summarize
+from .modes import (
+    Attribution,
+    FailureMode,
+    SuccessMode,
+    classify_failure,
+    classify_success,
+    looks_truncated,
+)
 from .pipeline import EndToEndResult, EndToEndRunner, EndToEndStatus
-from .proof_metrics import ProofStructure, analyze_proof
+from .proof_metrics import (
+    Correlation,
+    ProofStructure,
+    StatementComplexity,
+    analyze_proof,
+    analyze_statement,
+    correlate_with_success,
+)
 from .registry import (
     available,
     available_judges,
@@ -120,7 +135,18 @@ __all__ = [
     # analysis
     "extract_tactics",
     "analyze_proof",
+    "analyze_statement",
     "ProofStructure",
+    "StatementComplexity",
+    "Correlation",
+    "correlate_with_success",
+    # outcome classification, for passes and failures alike
+    "FailureMode",
+    "SuccessMode",
+    "Attribution",
+    "classify_failure",
+    "classify_success",
+    "looks_truncated",
     # statement checking
     "StatementTask",
     "StatementChecker",

@@ -13,7 +13,8 @@ import abc
 import time
 from typing import Any, Mapping, Sequence
 
-from .proof_metrics import analyze_proof
+from .modes import classify_failure, classify_success
+from .proof_metrics import analyze_proof, analyze_statement
 from .soundness import PATTERNS, HackClass, screen_source, strip_comments
 from .tactics import extract_tactics
 from .types import (
@@ -194,6 +195,17 @@ class Verifier(abc.ABC):
         # of passes is most of the analytical value here.
         tactics = extract_tactics(attempt.proof, task.language)
         structure = analyze_proof(attempt.proof, task.language, tactics=tactics).to_dict()
+        # The statement's own complexity travels with the result so solve
+        # rate can be correlated against it -- the closest thing to a
+        # difficulty axis available without human labels.
+        structure.update(
+            {
+                "statement_" + key: value
+                for key, value in analyze_statement(
+                    task.formal_statement, task.language
+                ).to_dict().items()
+            }
+        )
 
         def finish(
             status: Status,
@@ -203,14 +215,33 @@ class Verifier(abc.ABC):
             raw: Mapping[str, Any] | None = None,
             compile_time_s: float | None = None,
         ) -> VerificationResult:
+            # Both directions are classified here, once, so no caller has
+            # to re-derive them and a pass and a failure are described in
+            # equal detail.
+            report = soundness or SoundnessReport()
+            if status is Status.VERIFIED:
+                failure_mode = None
+                success_mode = classify_success(tactics, structure).value
+            else:
+                failure_mode = classify_failure(
+                    status,
+                    error_kind,
+                    tuple(diagnostics),
+                    proof=attempt.proof,
+                    soundness_ok=report.ok,
+                )
+                failure_mode = failure_mode.value if failure_mode else None
+                success_mode = None
             return VerificationResult(
                 task_id=task.task_id,
                 attempt_id=attempt.attempt_id or task.task_id,
                 backend=self.name,
                 status=status,
                 error_kind=error_kind,
-                soundness=soundness or SoundnessReport(),
+                soundness=report,
                 diagnostics=tuple(diagnostics),
+                failure_mode=failure_mode,
+                success_mode=success_mode,
                 wall_time_s=time.monotonic() - started,
                 compile_time_s=compile_time_s,
                 model=attempt.model,
