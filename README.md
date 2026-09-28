@@ -226,9 +226,37 @@ subset is honest), and the correlation table carries **no p-values** — with
 ~25 metrics scanned at once some will correlate by chance, so it is
 labelled a pointer, not a finding.
 
-Measured cost of all of the above: **0.16 ms per attempt**, against Lean
-compile times of seconds to minutes. See
-[docs/metrics.md](docs/metrics.md#cost-of-measuring).
+### Speed
+
+The analysis layer runs on every attempt of every run, so its cost is
+measured, budgeted and enforced rather than assumed.
+
+| | |
+|---|---|
+whole layer, per attempt | **0.18 ms** |
+1000-attempt run, all metrics | 0.18 s |
+one `lake env lean` compile, for scale | 1–60 s |
+
+```bash
+python benchmarks/bench_metrics.py           # the numbers, reproducible
+python benchmarks/bench_metrics.py --check   # enforce budgets (CI runs this)
+```
+
+Absolute budgets catch gross slowdowns, but they mean different things on
+different machines. The actual guarantee is **complexity**: scaling tests
+in `tests/test_performance.py` measure each hot path at size *n* and *4n*
+and fail if the ratio approaches quadratic, which is machine-independent.
+The guards are verified to fire — restoring the original quadratic
+dependency walk makes one report 58.6× growth for a 4× input against a 9×
+ceiling.
+
+Two optimizations paid for themselves: the dependency walk went from
+quadratic to linear (**140× faster** at 400 steps), and the ~40-pattern
+reward-hacking screen gained a literal prefilter (**45.9× faster** on the
+pattern loop). The second is only safe if a too-narrow trigger can never
+silently disable a check, so every pattern carries an example it must
+catch and a differential test proves the prefilter changes no verdict.
+Details in [docs/metrics.md](docs/metrics.md#cost-of-measuring).
 
 ## Judges
 

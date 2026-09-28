@@ -80,9 +80,24 @@ class HackPattern:
     pattern: re.Pattern[str]
     #: Shown to the user. Says what was found and why it does not count.
     message: str
-    multiline: bool = False
+    #: Lowercase literals, any one of which must appear for the regex to
+    #: have a chance of matching. Checked with a substring test before the
+    #: regex runs, which is a C-level scan instead of a backtracking one.
+    #: **Must be a superset condition**: if the regex can match, at least
+    #: one of these must be present, or the pattern would be skipped
+    #: wrongly. ``test_prefilter_admits_every_pattern_example`` enforces
+    #: that against ``example``, so an unsafe entry fails the suite.
+    requires: tuple[str, ...] = ()
+    #: A source snippet this pattern is meant to catch. Documents the
+    #: trick and makes the table self-testing.
+    example: str = ""
 
-    def search(self, body: str) -> bool:
+    def search(self, body: str, lowered: str | None = None) -> bool:
+        """Whether this pattern fires, skipping the regex when it cannot."""
+        if self.requires:
+            haystack = lowered if lowered is not None else body.lower()
+            if not any(literal in haystack for literal in self.requires):
+                return False
         return bool(self.pattern.search(body))
 
 
@@ -94,14 +109,28 @@ def _p(
     message: str,
     *,
     multiline: bool = False,
+    requires: Sequence[str] = (),
+    example: str = "",
 ) -> HackPattern:
     flags = re.MULTILINE if multiline else 0
-    return HackPattern(id, hack_class, tuple(languages), re.compile(regex, flags), message)
+    return HackPattern(
+        id,
+        hack_class,
+        tuple(languages),
+        re.compile(regex, flags),
+        message,
+        tuple(literal.lower() for literal in requires),
+        example,
+    )
 
 
 _LEAN = ("lean4", "lean3")
 
 #: Ordered only for readability; every pattern is evaluated.
+#:
+#: Each entry carries ``requires`` (cheap literal triggers, checked before
+#: the regex -- see :class:`HackPattern`) and ``example`` (a snippet the
+#: pattern must catch, which makes the table self-testing).
 PATTERNS: tuple[HackPattern, ...] = (
     # -- placeholders -------------------------------------------------
     _p(
@@ -110,6 +139,8 @@ PATTERNS: tuple[HackPattern, ...] = (
         _LEAN,
         r"\bsorry\b",
         "proof contains `sorry`, which Lean accepts with only a warning",
+        requires=("sorry",),
+        example="theorem t : True := by sorry",
     ),
     _p(
         "lean.sorry_ax",
@@ -117,6 +148,8 @@ PATTERNS: tuple[HackPattern, ...] = (
         _LEAN,
         r"\bsorryAx\b",
         "proof cites `sorryAx` directly, the axiom behind `sorry`",
+        requires=("sorryax",),
+        example="theorem t : True := sorryAx _",
     ),
     _p(
         "lean.admit",
@@ -124,6 +157,8 @@ PATTERNS: tuple[HackPattern, ...] = (
         _LEAN,
         r"\badmit\b",
         "proof contains `admit`, which closes the goal without proving it",
+        requires=("admit",),
+        example="theorem t : True := by admit",
     ),
     _p(
         "coq.admitted",
@@ -131,6 +166,8 @@ PATTERNS: tuple[HackPattern, ...] = (
         ("coq",),
         r"\b(Admitted|admit|give_up)\b",
         "proof is `Admitted` rather than `Qed`, so nothing was proved",
+        requires=("admit", "give_up"),
+        example="Lemma t : True. Proof. Admitted.",
     ),
     _p(
         "isabelle.sorry",
@@ -138,6 +175,8 @@ PATTERNS: tuple[HackPattern, ...] = (
         ("isabelle",),
         r"\b(sorry|oops)\b",
         "proof contains `sorry`/`oops`, which abandons the goal",
+        requires=("sorry", "oops"),
+        example="lemma t: True sorry",
     ),
     _p(
         "generic.todo_placeholder",
@@ -145,6 +184,8 @@ PATTERNS: tuple[HackPattern, ...] = (
         ("axle",),
         r"\b(sorry|admit|TODO|FIXME|__PLACEHOLDER__)\b",
         "proof contains a placeholder token",
+        requires=("sorry", "admit", "todo", "fixme", "__placeholder__"),
+        example="proof: TODO",
     ),
     # -- new axioms ---------------------------------------------------
     _p(
@@ -154,6 +195,8 @@ PATTERNS: tuple[HackPattern, ...] = (
         r"^\s*(?:@\[[^\]]*\]\s*)?(?:private\s+|protected\s+|unsafe\s+)?axiom\b",
         "proof declares a new `axiom`, which can simply assert the goal",
         multiline=True,
+        requires=("axiom",),
+        example="axiom cheat (n : Nat) : n = n",
     ),
     _p(
         "lean.constant",
@@ -162,6 +205,8 @@ PATTERNS: tuple[HackPattern, ...] = (
         r"^\s*(?:@\[[^\]]*\]\s*)?constant\b",
         "proof declares a `constant`, which introduces an unproven term",
         multiline=True,
+        requires=("constant",),
+        example="constant cheat : True",
     ),
     _p(
         "lean.opaque",
@@ -170,6 +215,8 @@ PATTERNS: tuple[HackPattern, ...] = (
         r"^\s*(?:@\[[^\]]*\]\s*)?opaque\b",
         "proof declares an `opaque` constant, whose value is assumed to exist",
         multiline=True,
+        requires=("opaque",),
+        example="opaque cheat : Nat",
     ),
     _p(
         "coq.assumption_decl",
@@ -178,6 +225,8 @@ PATTERNS: tuple[HackPattern, ...] = (
         r"^\s*(?:Axiom|Parameter|Hypothesis|Variable|Conjecture)\b",
         "proof declares an assumption instead of proving the goal",
         multiline=True,
+        requires=("axiom", "parameter", "hypothesis", "variable", "conjecture"),
+        example="Axiom cheat : True.",
     ),
     _p(
         "isabelle.axiomatization",
@@ -186,6 +235,8 @@ PATTERNS: tuple[HackPattern, ...] = (
         r"^\s*(?:axiomatization|consts)\b",
         "proof introduces an axiomatization instead of proving the goal",
         multiline=True,
+        requires=("axiomatization", "consts"),
+        example="axiomatization where cheat: True",
     ),
     # -- kernel bypass ------------------------------------------------
     _p(
@@ -195,6 +246,8 @@ PATTERNS: tuple[HackPattern, ...] = (
         r"\bnative_decide\b",
         "proof uses `native_decide`, which trusts the compiler instead of "
         "the kernel (it adds the `Lean.ofReduceBool` axiom)",
+        requires=("native_decide",),
+        example="theorem t : 2 + 2 = 4 := by native_decide",
     ),
     _p(
         "lean.skip_kernel_tc",
@@ -202,6 +255,8 @@ PATTERNS: tuple[HackPattern, ...] = (
         ("lean4",),
         r"set_option\s+debug\.skipKernelTC\s+true\b",
         "proof sets `debug.skipKernelTC`, turning off kernel typechecking",
+        requires=("skipkerneltc",),
+        example="set_option debug.skipKernelTC true",
     ),
     _p(
         "lean.implemented_by",
@@ -210,6 +265,8 @@ PATTERNS: tuple[HackPattern, ...] = (
         r"@\[\s*(?:[^\]]*,\s*)?implemented_by\b",
         "proof uses `@[implemented_by]`, which swaps in an unverified "
         "implementation at runtime",
+        requires=("implemented_by",),
+        example="@[implemented_by fake] def f : Nat := 0",
     ),
     _p(
         "lean.extern",
@@ -217,6 +274,8 @@ PATTERNS: tuple[HackPattern, ...] = (
         ("lean4",),
         r"@\[\s*(?:[^\]]*,\s*)?extern\b",
         "proof uses `@[extern]`, delegating to unverified external code",
+        requires=("extern",),
+        example='@[extern "c_impl"] def f : Nat := 0',
     ),
     _p(
         "lean.unsafe",
@@ -225,6 +284,8 @@ PATTERNS: tuple[HackPattern, ...] = (
         r"^\s*unsafe\b",
         "proof contains an `unsafe` declaration, which escapes the logic",
         multiline=True,
+        requires=("unsafe",),
+        example="unsafe def f : Nat := 0",
     ),
     _p(
         "lean.partial_def",
@@ -233,6 +294,8 @@ PATTERNS: tuple[HackPattern, ...] = (
         r"^\s*partial\s+(?:unsafe\s+)?def\b",
         "proof declares a `partial def`, whose termination is not checked",
         multiline=True,
+        requires=("partial",),
+        example="partial def loop (n : Nat) : Nat := loop n",
     ),
     _p(
         "lean.trust_compiler",
@@ -240,6 +303,8 @@ PATTERNS: tuple[HackPattern, ...] = (
         ("lean4",),
         r"\b(Lean\.trustCompiler|Lean\.ofReduceBool|Lean\.ofReduceNat)\b",
         "proof cites a compiler-trust axiom directly",
+        requires=("trustcompiler", "ofreducebool", "ofreducenat"),
+        example="theorem t : True := Lean.ofReduceBool _ _ _",
     ),
     _p(
         "coq.guard_checking",
@@ -247,6 +312,8 @@ PATTERNS: tuple[HackPattern, ...] = (
         ("coq",),
         r"Unset\s+(Guard|Positivity|Universe)\s+Checking",
         "proof disables a Coq kernel check",
+        requires=("unset",),
+        example="Unset Guard Checking.",
     ),
     # -- resource uncapping -------------------------------------------
     _p(
@@ -256,6 +323,8 @@ PATTERNS: tuple[HackPattern, ...] = (
         r"set_option\s+maxHeartbeats\s+0\b",
         "proof removes the heartbeat limit entirely, so a non-terminating "
         "search is indistinguishable from a proof",
+        requires=("maxheartbeats",),
+        example="set_option maxHeartbeats 0",
     ),
     _p(
         "lean.binder_annotations_off",
@@ -263,6 +332,8 @@ PATTERNS: tuple[HackPattern, ...] = (
         ("lean4",),
         r"set_option\s+checkBinderAnnotations\s+false\b",
         "proof disables binder-annotation checking",
+        requires=("checkbinderannotations",),
+        example="set_option checkBinderAnnotations false",
     ),
     _p(
         "lean.auto_implicit",
@@ -271,6 +342,8 @@ PATTERNS: tuple[HackPattern, ...] = (
         r"set_option\s+(?:relaxedAutoImplicit|autoImplicit)\s+true\b",
         "proof enables `autoImplicit`, which silently turns an unbound name "
         "into a universally quantified variable and can weaken the statement",
+        requires=("autoimplicit",),
+        example="set_option autoImplicit true",
     ),
     _p(
         "lean.structure_eta_off",
@@ -279,6 +352,8 @@ PATTERNS: tuple[HackPattern, ...] = (
         r"set_option\s+(?:structureEta|backward\.\w+)\s+(?:false|true)\b",
         "proof changes a low-level elaborator setting that can alter what "
         "the statement means",
+        requires=("structureeta", "backward."),
+        example="set_option structureEta false",
     ),
     # -- truncating the file so the rest is never checked ---------------
     _p(
@@ -289,6 +364,8 @@ PATTERNS: tuple[HackPattern, ...] = (
         "proof contains `#exit`, which makes Lean stop processing the rest of "
         "the file -- anything after it is never checked at all",
         multiline=True,
+        requires=("#exit",),
+        example="theorem t : True := trivial\n#exit\ngarbage",
     ),
     _p(
         "lean.proof_wanted",
@@ -298,6 +375,8 @@ PATTERNS: tuple[HackPattern, ...] = (
         "proof uses Mathlib's `proof_wanted`, which records a statement "
         "without proving it",
         multiline=True,
+        requires=("proof_wanted",),
+        example="proof_wanted t : True",
     ),
     # -- hypotheses smuggled in via section variables -------------------
     _p(
@@ -309,6 +388,8 @@ PATTERNS: tuple[HackPattern, ...] = (
         "theorem as extra hypotheses -- `variable (h : False)` weakens the "
         "statement to nothing while compiling cleanly",
         multiline=True,
+        requires=("variable",),
+        example="variable (hcheat : False)",
     ),
     # -- compile-time metaprogramming -----------------------------------
     _p(
@@ -319,6 +400,8 @@ PATTERNS: tuple[HackPattern, ...] = (
         "proof runs compile-time metaprogramming, which can add declarations "
         "or axioms programmatically, out of reach of any text-level check",
         multiline=True,
+        requires=("elab", "run_cmd", "run_elab", "initialize"),
+        example="run_cmd Lean.Elab.Command.elabCommand _",
     ),
 )
 
@@ -479,9 +562,14 @@ def screen_source(
     """
     report = SoundnessReport()
     body = strip_comments(source, language)
+    # Lowercased once and shared, so the literal prefilter in
+    # HackPattern.search is a single C-level substring scan per pattern
+    # instead of a backtracking regex over the whole body. On an honest
+    # proof almost every pattern is ruled out this way.
+    lowered = body.lower()
 
     for pattern in PATTERNS:
-        if language in pattern.languages and pattern.search(body):
+        if language in pattern.languages and pattern.search(body, lowered):
             report = report.with_violation(label(pattern.hack_class, pattern.id, pattern.message))
 
     if allowed_imports is not None and language == "lean4":

@@ -251,42 +251,66 @@ exercise as `brute_force_decide` climbs.
 
 ## Cost of measuring
 
-Measured, not estimated, because "the metrics are slow" is a claim worth
-having numbers for. On a 3.5 GHz desktop, CPython 3.12:
+Measured, not estimated, and enforced. Reproduce with
+`python benchmarks/bench_metrics.py`; CI runs it with `--check`.
 
-| | median |
-|---|---|
-`verify` on a typical proof, **including every metric on this page** | **0.16 ms** |
-`analyze_proof` on a 13 KB proof | 4.0 ms |
-`analyze_proof` on a 2000-step `have` chain | ~30 ms |
-`screen_source` (all ~40 reward-hacking patterns) on 13 KB | 3.2 ms |
-repetition metrics (lines + tactics + trigrams) on 13 KB | 1.7 ms |
-`sample_duplication` over 1000 samples | 0.13 ms |
-`summarize` over 1000 results | 23 ms |
+Windows AMD64, CPython 3.12, best-of-N:
 
-So a 1000-attempt run spends about **0.16 s** on metrics in total. Against
-Lean compile times of seconds to minutes per attempt, the analysis layer
-is a rounding error — the prover dominates by three to four orders of
-magnitude. Repetition specifically is among the cheapest things here:
-counting distinct lines, distinct tactics and distinct trigrams is one
-pass each over text already in memory.
+| case | time | budget | of budget |
+|---|---|---|---|
+`verify` on a typical proof, **including every metric on this page** | **0.18 ms** | 10 ms | 1.8% |
+`analyze_proof` on a 13 KB proof | 3.7 ms | 100 ms | 3.7% |
+`analyze_proof` on a 400-step `have` chain | 5.5 ms | 200 ms | 2.8% |
+`analyze_proof` on a 2000-step chain | 28.8 ms | 1000 ms | 2.9% |
+`screen_source`, honest 13 KB proof | 1.1 ms | 100 ms | 1.1% |
+`screen_source`, 13 KB containing a `sorry` | 1.3 ms | 100 ms | 1.3% |
+`extract_tactics` on 13 KB | 0.8 ms | 50 ms | 1.6% |
+`analyze_statement` | 0.04 ms | 5 ms | 0.7% |
+`summarize` over 1000 results | 58 ms | 1000 ms | 5.8% |
+`sample_duplication` over 1000 samples | 0.07 ms | 50 ms | 0.1% |
+end to end: 1000 attempts + summarize | 138 ms | 10 s | 1.4% |
 
-Two things were made cheap deliberately, because the naive versions were
-not:
+A 1000-attempt run spends about **0.18 s** on metrics. One `lake env lean`
+compile is typically 1–60 s, so the prover dominates by three to five
+orders of magnitude and the analysis layer is a rounding error.
+
+### How the speed is guaranteed
+
+Absolute budgets catch gross slowdowns but mean different things on
+different machines. The real guarantee is complexity, checked by
+**machine-independent scaling tests** in `tests/test_performance.py`: each
+measures cost at size *n* and *4n* and fails if the ratio approaches
+quadratic. Covered: `analyze_proof` (chained, wide and repetitive inputs),
+`extract_tactics`, `screen_source` with and without statement checks,
+`summarize`, and `sample_duplication`.
+
+These guards are verified to actually fire. Re-introducing the original
+quadratic dependency walk makes the chained test report **58.6× growth for
+a 4× size increase** against a 9× ceiling.
+
+### What was optimized, and why it is safe
 
 * **Dependency depth was quadratic.** Regex-searching every earlier step
   name in every step's justification measured 177 ms at 400 steps.
   Tokenizing each justification once and intersecting against the names
-  seen so far is linear: 1.2 ms at 400 steps, 140× faster.
-  `test_analysis_stays_linear_in_the_number_of_steps` locks this in.
-* **Tokenization and tactic extraction ran twice per attempt** — once for
-  the size metrics, once for repetition. They are computed once and passed
-  through now.
+  seen so far is linear — 1.2 ms at 400 steps, **140× faster**.
+* **The reward-hacking screen ran ~40 regexes over the whole body.** Each
+  pattern now declares `requires`, a set of lowercase literal triggers
+  checked with a substring test before the regex runs. An honest proof
+  contains none of them, so almost every pattern is ruled out by a C-level
+  scan: **45.9× faster** on the pattern loop, 3.2 ms → 1.1 ms overall.
 
-The remaining largest cost is `screen_source`, and it is left alone on
-purpose: it is the check that decides whether any of the other numbers
-mean anything, and 3 ms is not worth trading for a fused-regex version
-that is harder to audit.
+  This optimization is only safe if a too-narrow trigger set can never
+  silently switch a check off — and that failure would be invisible, since
+  every positive-detection test supplies the trigger itself. So each
+  pattern also carries an `example` it must catch, and two tests enforce
+  the implication: `test_prefilter_admits_every_pattern_example` and
+  `test_prefilter_gives_the_same_verdicts_as_no_prefilter`, a differential
+  test over every example plus honest proofs. A wrong trigger fails the
+  suite rather than quietly disabling reward-hacking detection.
+* **Tokenization and tactic extraction ran twice per attempt** — once for
+  the size metrics, once for repetition. Computed once and passed through.
+* **Trigram counting** no longer materializes a list of *n*−2 tuples.
 
 ## Not computed, and why
 
