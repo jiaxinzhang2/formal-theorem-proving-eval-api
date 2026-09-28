@@ -21,11 +21,13 @@ from pathlib import Path
 from typing import Any, Sequence
 
 from . import __version__
-from .dataset import load_attempts, load_results, load_tasks
+from .dataset import load_attempts, load_results, load_tasks, load_triplets, write_jsonl
 from .metrics import compare as compare_summaries, summarize
-from .registry import available, create
+from .pipeline import EndToEndRunner, EndToEndStatus, format_end_to_end
+from .registry import available, available_judges, create, create_judge
 from .runner import EvalRunner, ProgressEvent, RunConfig
-from .types import ProofAttempt, ProofTask, Status
+from .statement import StatementChecker, format_statement_summary
+from .types import ProofAttempt, ProofTask, StatementStatus, Status
 from .verifier import assemble_source, screen_soundness
 
 EXIT_OK = 0
@@ -190,7 +192,7 @@ def cmd_verify(args: argparse.Namespace) -> int:
 
     summary = summarize(results, ks=_parse_ks(args.k), include_per_task=bool(args.per_task_out))
     print()
-    print(summary.format_text())
+    print(summary.format_text(include_tactics=args.tactics))
 
     if args.summary_out:
         Path(args.summary_out).write_text(
@@ -211,13 +213,185 @@ def cmd_verify(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+def cmd_judges(args: argparse.Namespace) -> int:
+    rows = []
+    for name in available_judges():
+        try:
+            rows.append(create_judge(name).info().to_dict())
+        except Exception as exc:
+            rows.append(
+                {
+                    "name": name,
+                    "available": False,
+                    "model": None,
+                    "detail": "%s: %s" % (type(exc).__name__, exc),
+                    "costs_money": None,
+                }
+            )
+    if args.json:
+        print(json.dumps(rows, indent=2))
+        return EXIT_OK
+    print("%-10s %-11s %-7s %-18s %s" % ("judge", "available", "paid", "model", "detail"))
+    for row in rows:
+        print(
+            "%-10s %-11s %-7s %-18s %s"
+            % (
+                row["name"],
+                "yes" if row["available"] else "NO",
+                "yes" if row["costs_money"] else "no",
+                row.get("model") or "",
+                (row.get("detail") or "")[:70],
+            )
+        )
+    return EXIT_OK
+
+
+def _build_checker(args: argparse.Namespace) -> tuple[Any, Any]:
+    """Build the verifier and judge a statement check needs."""
+    verifier = None
+    if args.backend:
+        verifier = create(args.backend, **_parse_backend_config(args.option))
+        info = verifier.info()
+        if not info.available:
+            print(
+                "note: backend %r is unavailable (%s); prover-decidable checks will "
+                "report as not run" % (info.name, info.detail),
+                file=sys.stderr,
+            )
+    judge = None
+    if args.judge:
+        judge = create_judge(
+            args.judge,
+            consensus=args.judge_samples,
+            recheck=args.judge_recheck,
+            **_parse_backend_config(args.judge_option),
+        )
+        judge_info = judge.info()
+        if not judge_info.available:
+            print(
+                "judge %r is unavailable: %s" % (judge_info.name, judge_info.detail),
+                file=sys.stderr,
+            )
+            raise SystemExit(EXIT_BACKEND_UNAVAILABLE)
+        if judge_info.costs_money and not args.yes:
+            print(
+                "judge %r calls a paid API (%s). Re-run with --yes to confirm."
+                % (judge_info.name, judge_info.model),
+                file=sys.stderr,
+            )
+            raise SystemExit(EXIT_USAGE)
+    return verifier, judge
+
+
+def cmd_check_statement(args: argparse.Namespace) -> int:
+    verifier, judge = _build_checker(args)
+    tasks, _ = load_triplets(
+        args.informal, args.formal, None, language=args.language or "lean4"
+    )
+    if args.limit:
+        tasks = tasks[: args.limit]
+
+    checker = StatementChecker(verifier, judge, timeout_s=args.timeout)
+    verdicts = []
+    try:
+        for index, task in enumerate(tasks, start=1):
+            verdict = checker.check(task)
+            verdicts.append(verdict)
+            if not args.quiet:
+                failures = verdict.failures
+                detail = "  <- %s" % failures[0].detail[:80] if failures else ""
+                print(
+                    "[%d/%d] %-12s %-28s%s"
+                    % (index, len(tasks), verdict.status.value, task.task_id[:28], detail),
+                    file=sys.stderr,
+                    flush=True,
+                )
+    finally:
+        if verifier is not None:
+            verifier.close()
+        if judge is not None:
+            judge.close()
+
+    if args.out:
+        write_jsonl(args.out, verdicts)
+        print("wrote %d verdict(s) to %s" % (len(verdicts), args.out), file=sys.stderr)
+    print()
+    print(format_statement_summary(verdicts))
+
+    if args.strict and any(
+        v.status in (StatementStatus.MALFORMED, StatementStatus.SUSPICIOUS) for v in verdicts
+    ):
+        return EXIT_UNSOUND
+    return EXIT_OK
+
+
+def cmd_eval_all(args: argparse.Namespace) -> int:
+    """Statement check and proof check together, with a combined verdict."""
+    verifier, judge = _build_checker(args)
+    if verifier is None:
+        print("eval-all needs a verifier; pass --backend", file=sys.stderr)
+        return EXIT_USAGE
+    info = verifier.info()
+    if not info.available:
+        print("backend %r is unavailable: %s" % (info.name, info.detail), file=sys.stderr)
+        return EXIT_BACKEND_UNAVAILABLE
+
+    tasks, attempts = load_triplets(
+        args.informal, args.formal, args.proofs, language=args.language or "lean4"
+    )
+    if args.limit:
+        tasks = tasks[: args.limit]
+        keep = {t.task_id for t in tasks}
+        attempts = [a for a in attempts if a.task_id in keep]
+
+    checker = StatementChecker(verifier, judge, timeout_s=args.timeout)
+    runner = EndToEndRunner(verifier, checker, timeout_s=args.timeout)
+    results = []
+    try:
+        for index, result in enumerate(runner.iter_run(tasks, attempts), start=1):
+            results.append(result)
+            if not args.quiet:
+                print(
+                    "[%d/%d] %-26s %s"
+                    % (index, len(tasks), result.status.value, result.task_id[:30]),
+                    file=sys.stderr,
+                    flush=True,
+                )
+    finally:
+        verifier.close()
+        if judge is not None:
+            judge.close()
+
+    if args.out:
+        write_jsonl(args.out, results)
+        print("wrote %d result(s) to %s" % (len(results), args.out), file=sys.stderr)
+
+    print()
+    print(format_end_to_end(results))
+    print()
+    print(format_statement_summary([r.statement for r in results]))
+    proof_results = [r.proof for r in results if r.proof is not None]
+    if proof_results:
+        print()
+        print(summarize(proof_results, ks=(1,)).format_text(include_tactics=args.tactics))
+
+    if args.strict and not all(r.solved for r in results):
+        failed = [r for r in results if r.status is not EndToEndStatus.SOLVED]
+        return EXIT_UNSOUND if any(
+            r.status
+            in (EndToEndStatus.PROVED_WRONG_STATEMENT, EndToEndStatus.HACKED_PROOF)
+            for r in failed
+        ) else EXIT_OK
+    return EXIT_OK
+
+
 def cmd_score(args: argparse.Namespace) -> int:
     results = load_results(args.results)
     summary = summarize(results, ks=_parse_ks(args.k), include_per_task=args.unsolved)
     if args.json:
         print(json.dumps(summary.to_dict(), indent=2, ensure_ascii=False))
     else:
-        print(summary.format_text())
+        print(summary.format_text(include_tactics=args.tactics))
         if args.unsolved:
             unsolved = [o for o in summary.per_task if not o.solved]
             if unsolved:
@@ -319,6 +493,11 @@ def build_parser() -> argparse.ArgumentParser:
     p_verify.add_argument("--limit", type=int, help="only the first N tasks")
     p_verify.add_argument("--limit-samples", type=int, help="only the first N samples per task")
     p_verify.add_argument("--k", default="1", help="pass@k values, e.g. 1,5,10")
+    p_verify.add_argument(
+        "--tactics",
+        action="store_true",
+        help="also show tactic frequencies and proof-structure metrics",
+    )
     p_verify.add_argument("--quiet", action="store_true", help="no per-attempt progress lines")
     p_verify.add_argument(
         "--strict",
@@ -332,8 +511,82 @@ def build_parser() -> argparse.ArgumentParser:
     p_score.add_argument("--k", default="1,5,10")
     p_score.add_argument("--json", action="store_true")
     p_score.add_argument("--unsolved", action="store_true", help="also list unsolved tasks")
+    p_score.add_argument(
+        "--tactics",
+        action="store_true",
+        help="also show tactic frequencies and proof-structure metrics",
+    )
     p_score.add_argument("--strict", action="store_true")
     p_score.set_defaults(func=cmd_score)
+
+    p_judges = sub.add_parser("judges", help="list faithfulness judges")
+    p_judges.add_argument("--json", action="store_true")
+    p_judges.set_defaults(func=cmd_judges)
+
+    def add_judge_opts(p: argparse.ArgumentParser) -> None:
+        p.add_argument("--judge", help="faithfulness judge (mock, claude)")
+        p.add_argument(
+            "--judge-option",
+            action="append",
+            default=[],
+            metavar="KEY=VALUE",
+            help="judge option, e.g. model=claude-opus-5 (repeatable)",
+        )
+        p.add_argument(
+            "--judge-samples",
+            type=int,
+            default=1,
+            help="draw N samples and take a majority vote (>1 enables consensus)",
+        )
+        p.add_argument(
+            "--judge-recheck",
+            type=int,
+            default=2,
+            help="extra samples drawn before a rejection stands (default 2)",
+        )
+        p.add_argument(
+            "--yes",
+            action="store_true",
+            help="confirm that a paid judge may be called",
+        )
+
+    p_check = sub.add_parser(
+        "check-statement",
+        help="check formalizations against their natural-language problems",
+    )
+    p_check.add_argument("--informal", required=True, help="natural-language problems .jsonl")
+    p_check.add_argument("--formal", required=True, help="formal statements .jsonl")
+    p_check.add_argument("-b", "--backend", default="lean4", help="prover for the probes")
+    p_check.add_argument("-o", "--option", action="append", default=[], metavar="KEY=VALUE")
+    add_judge_opts(p_check)
+    p_check.add_argument("--out", help="write verdicts here as JSONL")
+    p_check.add_argument("--timeout", type=float, default=120.0)
+    p_check.add_argument("--language")
+    p_check.add_argument("--limit", type=int)
+    p_check.add_argument("--quiet", action="store_true")
+    p_check.add_argument(
+        "--strict", action="store_true", help="exit non-zero on a bad formalization"
+    )
+    p_check.set_defaults(func=cmd_check_statement)
+
+    p_all = sub.add_parser(
+        "eval-all",
+        help="check formalization and proof together, from the three-file layout",
+    )
+    p_all.add_argument("--informal", required=True)
+    p_all.add_argument("--formal", required=True)
+    p_all.add_argument("--proofs", required=True)
+    p_all.add_argument("-b", "--backend", default="lean4")
+    p_all.add_argument("-o", "--option", action="append", default=[], metavar="KEY=VALUE")
+    add_judge_opts(p_all)
+    p_all.add_argument("--out", help="write combined results here as JSONL")
+    p_all.add_argument("--timeout", type=float, default=300.0)
+    p_all.add_argument("--language")
+    p_all.add_argument("--limit", type=int)
+    p_all.add_argument("--quiet", action="store_true")
+    p_all.add_argument("--tactics", action="store_true")
+    p_all.add_argument("--strict", action="store_true")
+    p_all.set_defaults(func=cmd_eval_all)
 
     p_compare = sub.add_parser("compare", help="rank several results files")
     p_compare.add_argument("results", nargs="+", metavar="[NAME=]PATH")

@@ -18,6 +18,8 @@ import re
 import shutil
 import subprocess
 import tempfile
+import time
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -25,15 +27,25 @@ from ..types import (
     BackendInfo,
     Diagnostic,
     ErrorKind,
+    ProbeKind,
     ProofAttempt,
     ProofTask,
     Severity,
     SoundnessReport,
+    StatementTask,
     Status,
 )
+from ..soundness import audit_axioms
 from ..verifier import BackendUnavailable, RawVerdict, Verifier, VerifierError
 
-__all__ = ["Lean4Verifier", "parse_lean_log", "classify_lean_message"]
+__all__ = [
+    "Lean4Verifier",
+    "parse_lean_log",
+    "classify_lean_message",
+    "LeanTheorem",
+    "parse_lean_theorem",
+    "parse_printed_axioms",
+]
 
 #: ``file.lean:12:4: error: message`` -- Lean's standard message prefix.
 _MESSAGE_RE = re.compile(
@@ -118,6 +130,168 @@ def parse_lean_log(text: str) -> list[Diagnostic]:
     return out
 
 
+@dataclass(frozen=True)
+class LeanTheorem:
+    """A Lean 4 theorem taken apart into the pieces a probe needs.
+
+    ``theorem foo (n : Nat) (h : 0 < n) : n ^ 2 >= n := by`` becomes
+    keyword ``theorem``, name ``foo``, binders ``(n : Nat) (h : 0 < n)``,
+    conclusion ``n ^ 2 >= n``.
+    """
+
+    keyword: str
+    name: str
+    binders: str
+    conclusion: str
+
+    def rebuild(self, *, name: str | None = None, conclusion: str | None = None) -> str:
+        """Reassemble, optionally substituting the name or the goal."""
+        parts = [self.keyword, name or self.name]
+        if self.binders.strip():
+            parts.append(self.binders.strip())
+        return "%s : %s" % (" ".join(parts), conclusion if conclusion is not None else self.conclusion)
+
+
+#: Declaration keywords whose shape is ``kw name binders : goal``.
+_THEOREM_KEYWORDS = ("theorem", "lemma", "example", "problem")
+
+_OPENERS = {"(": ")", "[": "]", "{": "}", "⟨": "⟩", "⦃": "⦄"}
+_CLOSERS = {v: k for k, v in _OPENERS.items()}
+
+
+def _split_top_level_colon(text: str) -> int:
+    """Index of the ``:`` that separates binders from the goal, or -1.
+
+    Walks the string tracking bracket depth so that the colons inside
+    ``(n : Nat)`` are skipped, and skips ``:=`` so that a statement with
+    no binders is not split at its assignment.
+    """
+    depth = 0
+    i = 0
+    while i < len(text):
+        ch = text[i]
+        if ch in _OPENERS:
+            depth += 1
+        elif ch in _CLOSERS:
+            depth -= 1
+            if depth < 0:
+                return -1
+        elif ch == ":" and depth == 0:
+            if text[i : i + 2] == ":=":
+                return -1
+            return i
+        i += 1
+    return -1
+
+
+def parse_lean_theorem(statement: str) -> LeanTheorem | None:
+    """Split a Lean 4 theorem statement into its parts.
+
+    Returns ``None`` for anything it cannot take apart confidently --
+    mutual blocks, ``def``s, statements whose binders do not balance.
+    Refusing beats guessing here: a mis-parsed statement produces a probe
+    that tests the wrong proposition and reports a confident wrong answer.
+    """
+    text = strip_lean_comments(statement).strip()
+    if not text:
+        return None
+
+    # Drop anything from the proof seam onward; the binders and goal are
+    # all that a probe needs.
+    seam = _find_seam(text)
+    if seam != -1:
+        text = text[:seam].rstrip()
+
+    match = re.match(
+        r"^(?:@\[[^\]]*\]\s*)?(?:private\s+|protected\s+|nonrec\s+)?(%s)\s+"
+        % "|".join(_THEOREM_KEYWORDS),
+        text,
+    )
+    if not match:
+        return None
+    keyword = match.group(1)
+    rest = text[match.end() :].lstrip()
+
+    # `example` has no name; everything else takes an identifier.
+    if keyword == "example":
+        name, after_name = "", rest
+    else:
+        name_match = re.match(r"^([^\s({\[:]+)", rest)
+        if not name_match:
+            return None
+        name = name_match.group(1)
+        after_name = rest[name_match.end() :]
+
+    colon = _split_top_level_colon(after_name)
+    if colon == -1:
+        return None
+    binders = after_name[:colon].strip()
+    conclusion = after_name[colon + 1 :].strip()
+    if not conclusion:
+        return None
+    return LeanTheorem(keyword=keyword, name=name or "anonymous", binders=binders, conclusion=conclusion)
+
+
+def _find_seam(text: str) -> int:
+    """Index of the top-level ``:=`` that starts the proof, or -1."""
+    depth = 0
+    for i, ch in enumerate(text):
+        if ch in _OPENERS:
+            depth += 1
+        elif ch in _CLOSERS:
+            depth -= 1
+        elif ch == ":" and depth == 0 and text[i : i + 2] == ":=":
+            return i
+    return -1
+
+
+def strip_lean_comments(text: str) -> str:
+    """Remove Lean block and line comments."""
+    out = re.sub(r"/-(?:.|\n)*?-/", " ", text)
+    return re.sub(r"--[^\n]*", " ", out)
+
+
+def _normalize_binders(binders: str) -> str:
+    """Whitespace-insensitive form, for comparing two binder lists."""
+    return re.sub(r"\s+", " ", binders.strip())
+
+
+#: ``'foo' depends on axioms: [propext, Classical.choice]`` -- or
+#: ``'foo' does not depend on any axioms``.
+_AXIOMS_LINE_RE = re.compile(
+    r"'(?P<name>[^']+)'\s+(?:depends on axioms:\s*\[(?P<axioms>[^\]]*)\]"
+    r"|does not depend on any axioms)",
+)
+
+
+def parse_printed_axioms(log: str, name: str) -> list[str] | None:
+    """Read a ``#print axioms`` listing out of Lean's output.
+
+    Returns the axiom names, ``[]`` when Lean said the declaration depends
+    on none, or ``None`` when no listing for ``name`` was found -- which
+    means the audit did not run and must not be read as a clean result.
+    """
+    for match in _AXIOMS_LINE_RE.finditer(log):
+        printed = match.group("name")
+        if printed != name and not printed.endswith("." + name):
+            continue
+        raw = match.group("axioms")
+        if raw is None:
+            return []
+        return [a.strip() for a in raw.split(",") if a.strip()]
+    return None
+
+
+#: Tactics tried when asking "is this goal trivially closable?". Cheap and
+#: total, so the probe is fast; ``decide``/``norm_num`` are included
+#: because a formalization reduced to a closed numeric claim is exactly
+#: the degenerate case worth catching.
+_TRIVIAL_TACTICS = ("trivial", "rfl", "simp", "decide", "norm_num", "omega", "tauto")
+
+#: Tactics tried when asking "are these hypotheses contradictory?".
+_VACUITY_TACTICS = ("omega", "simp_all", "exact absurd rfl (by decide)", "linarith", "tauto")
+
+
 class Lean4Verifier(Verifier):
     """Verify Lean 4 proofs by compiling them in a Lean project.
 
@@ -148,9 +322,16 @@ class Lean4Verifier(Verifier):
         max_heartbeats: int | None = 400_000,
         extra_args: Iterable[str] = (),
         keep_sources: str | os.PathLike[str] | None = None,
+        audit_axioms: bool = True,
+        axiom_audit_timeout_s: float = 180.0,
         **config: Any,
     ) -> None:
         super().__init__(**config)
+        #: Run the kernel axiom audit on accepted proofs. Costs a second
+        #: compile per verified attempt and is the strongest soundness
+        #: evidence available, so it defaults on.
+        self.audit_axioms = audit_axioms
+        self.axiom_audit_timeout_s = axiom_audit_timeout_s
         raw_dir = project_dir or os.environ.get("FTP_EVAL_LEAN_PROJECT")
         self.project_dir = Path(raw_dir).expanduser().resolve() if raw_dir else None
         self.lake = lake or os.environ.get("FTP_EVAL_LAKE") or "lake"
@@ -249,6 +430,9 @@ class Lean4Verifier(Verifier):
         cmd.extend(self.extra_args)
         cmd.append(str(path))
 
+        # Timed around the subprocess alone, so the figure is Lean's own
+        # elaboration cost and not our file writing, screening or parsing.
+        compile_started = time.monotonic()
         try:
             proc = subprocess.run(
                 cmd,
@@ -260,24 +444,29 @@ class Lean4Verifier(Verifier):
                 timeout=timeout_s,
             )
         except subprocess.TimeoutExpired:
-            return RawVerdict.timeout({"command": " ".join(cmd), "timeout_s": timeout_s})
+            return RawVerdict.timeout(
+                {"command": " ".join(cmd), "timeout_s": timeout_s},
+                compile_time_s=time.monotonic() - compile_started,
+            )
         except OSError as exc:
             raise VerifierError("failed to run lean: %s" % exc) from exc
         finally:
             cleanup()
+        compile_time_s = time.monotonic() - compile_started
 
         log = (proc.stdout or "") + ("\n" + proc.stderr if proc.stderr else "")
         diagnostics = parse_lean_log(log)
         raw = {
             "exit_code": proc.returncode,
             "command": " ".join(cmd),
+            "compile_time_s": round(compile_time_s, 4),
             "stdout": proc.stdout[-8000:],
             "stderr": proc.stderr[-4000:],
         }
 
         errors = [d for d in diagnostics if d.severity is Severity.ERROR]
         if proc.returncode == 0 and not errors:
-            return RawVerdict.verified(raw)
+            return RawVerdict.verified(raw, compile_time_s=compile_time_s)
 
         if errors:
             # The first error is the one the model has to fix; later ones
@@ -292,7 +481,7 @@ class Lean4Verifier(Verifier):
             )
         else:
             kind = ErrorKind.UNKNOWN
-        return RawVerdict.failed(kind, diagnostics, raw)
+        return RawVerdict.failed(kind, diagnostics, raw, compile_time_s=compile_time_s)
 
     def _with_options(self, source: str) -> str:
         """Insert resource caps so one attempt cannot hang the run.
@@ -348,6 +537,70 @@ class Lean4Verifier(Verifier):
 
         return path, cleanup
 
+    # -- statement probes ---------------------------------------------
+
+    def build_probe(self, task: StatementTask, kind: ProbeKind) -> str | None:
+        """Build the Lean source that answers one question about a statement.
+
+        Every probe reuses the statement's own binders, so it asks about
+        the proposition the dataset actually contains rather than a
+        paraphrase of it. Returns ``None`` when the statement does not
+        parse, which the caller reports as "check did not run".
+        """
+        header = task.header.rstrip()
+        parsed = parse_lean_theorem(task.formal_statement)
+
+        if kind is ProbeKind.ELABORATES:
+            # No parse needed: keep the statement verbatim and give it a
+            # placeholder body. If this fails to compile, the statement
+            # itself is broken, whatever the proof might have said.
+            statement = task.formal_statement.rstrip()
+            seam = _find_seam(strip_lean_comments(statement))
+            body = statement if seam != -1 else statement + " :="
+            return self._probe_file(header, "%s sorry" % body.rstrip())
+
+        if parsed is None:
+            return None
+
+        if kind is ProbeKind.TRIVIAL:
+            # `first | tac | tac | ...` succeeds if any single cheap tactic
+            # closes the goal. One compile instead of seven.
+            tactics = " | ".join(_TRIVIAL_TACTICS)
+            statement = parsed.rebuild(name="ftp_eval_triviality_probe")
+            return self._probe_file(header, "%s := by\n  first | %s" % (statement, tactics))
+
+        if kind is ProbeKind.VACUOUS:
+            if not parsed.binders.strip():
+                # No hypotheses means nothing to be contradictory.
+                return None
+            tactics = " | ".join(_VACUITY_TACTICS)
+            statement = parsed.rebuild(name="ftp_eval_vacuity_probe", conclusion="False")
+            return self._probe_file(header, "%s := by\n  first | %s" % (statement, tactics))
+
+        if kind is ProbeKind.GOLD_EQUIVALENT:
+            gold = parse_lean_theorem(task.gold_formal_statement or "")
+            if gold is None:
+                return None
+            if _normalize_binders(gold.binders) != _normalize_binders(parsed.binders):
+                # Different binders mean the two goals are stated over
+                # different contexts; an `Iff` between them would not
+                # typecheck, and pretending otherwise would produce a
+                # compile error we would misread as "not equivalent".
+                return None
+            statement = parsed.rebuild(
+                name="ftp_eval_gold_equivalence_probe",
+                conclusion="(%s) ↔ (%s)" % (parsed.conclusion, gold.conclusion),
+            )
+            return self._probe_file(
+                header, "%s := by\n  first | rfl | simp | tauto | constructor <;> intro h <;> simpa using h" % statement
+            )
+
+        return None
+
+    def _probe_file(self, header: str, body: str) -> str:
+        parts = [p for p in (header, body) if p.strip()]
+        return "\n\n".join(parts) + "\n"
+
     # -- soundness ----------------------------------------------------
 
     def extra_soundness_checks(
@@ -355,19 +608,72 @@ class Lean4Verifier(Verifier):
     ) -> SoundnessReport:
         """Upgrade the regex screen with what Lean itself reports.
 
-        ``declaration uses 'sorry'`` is emitted as a *warning*, so a file
-        full of ``sorry`` compiles with exit code 0. Without this check a
-        model that answers every problem with ``sorry`` scores 100%.
+        Two layers, in increasing strength:
+
+        1. **Lean's own warnings.** ``declaration uses 'sorry'`` is a
+           *warning*, so a file full of ``sorry`` compiles with exit code
+           0. Without this a model that answers ``sorry`` scores 100%.
+        2. **A kernel axiom audit** (``#print axioms``), when
+           ``audit_axioms`` is on. This is the only check that sees
+           through indirection: a ``sorry`` inside a helper lemma, or an
+           axiom pulled in from another file, still appears in the axiom
+           set. It is also the check that catches the case where the
+           kernel is genuinely satisfied -- ``axiom cheat : <goal>``
+           typechecks perfectly and produces no warning at all, and the
+           only trace is ``cheat`` in this listing.
         """
         report = SoundnessReport()
         if verdict.status is not Status.VERIFIED:
             return report
+
         for d in verdict.diagnostics:
             lowered = d.message.lower()
             if "uses 'sorry'" in lowered or "uses sorry" in lowered:
-                report = report.with_violation("Lean reports the declaration uses 'sorry'")
-            elif "uses 'native_decide'" in lowered or "native_decide" in lowered:
                 report = report.with_violation(
-                    "proof relies on native_decide, which trusts the compiler rather than the kernel"
+                    "[placeholder] Lean reports the declaration uses 'sorry'"
                 )
+            elif "native_decide" in lowered:
+                report = report.with_violation(
+                    "[kernel_bypass] Lean reports the proof relies on native_decide, "
+                    "which trusts the compiler rather than the kernel"
+                )
+
+        if self.audit_axioms:
+            report = report.merge(self._audit_axioms(task, source))
         return report
+
+    def _audit_axioms(self, task: ProofTask, source: str) -> SoundnessReport:
+        """Re-elaborate the file with ``#print axioms`` appended.
+
+        Costs a second compile, which is why it is separately switchable.
+        It is worth it on a headline run: this is the difference between
+        "the compiler was happy" and "the kernel checked it from the
+        standard axioms and nothing else".
+        """
+        parsed = parse_lean_theorem(task.formal_statement)
+        if parsed is None or parsed.name in ("", "anonymous"):
+            # Nothing to interrogate -- an `example` has no name to print
+            # axioms for. Reported as no evidence, not as a pass.
+            return SoundnessReport()
+
+        probe = "%s\n\n#print axioms %s\n" % (source.rstrip(), parsed.name)
+        statement_task = StatementTask(
+            task_id=task.task_id,
+            informal_statement=task.informal_statement or "",
+            formal_statement=task.formal_statement,
+            header=task.header,
+            language=task.language,
+            timeout_s=task.timeout_s,
+        )
+        result = self.probe(statement_task, probe, timeout_s=self.axiom_audit_timeout_s)
+
+        if result.status in (Status.ERROR, Status.SKIPPED):
+            # The audit could not run. Say nothing rather than invent a
+            # verdict; the caller still has the regex screen.
+            return SoundnessReport()
+
+        log = "%s\n%s" % (result.raw.get("stdout") or "", result.raw.get("stderr") or "")
+        axioms = parse_printed_axioms(log, parsed.name)
+        if axioms is None:
+            return SoundnessReport()
+        return audit_axioms(axioms)

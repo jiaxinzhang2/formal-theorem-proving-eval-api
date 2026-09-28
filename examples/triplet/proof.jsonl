@@ -1,0 +1,4 @@
+{"task_id": "nat_add_zero", "model": "demo-model", "sample_index": 0, "proof": " simp MOCK_PASS"}
+{"task_id": "sq_nonneg", "model": "demo-model", "sample_index": 0, "proof": " positivity MOCK_PASS"}
+{"task_id": "lost_content", "model": "demo-model", "sample_index": 0, "proof": " trivial MOCK_PASS"}
+{"task_id": "vacuous_hyps", "model": "demo-model", "sample_index": 0, "proof": " omega MOCK_PASS"}

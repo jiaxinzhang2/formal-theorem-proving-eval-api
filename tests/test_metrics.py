@@ -101,7 +101,7 @@ def test_rejected_attempts_count_as_failures_not_passes():
     assert summary.pass_at[1] == pytest.approx(0.5)
     assert summary.soundness_violations == {"used sorry": 1}
     assert not summary.integrity_ok
-    assert "SOUNDNESS" in summary.format_text()
+    assert "REWARD HACKING" in summary.format_text()
 
 
 def test_solve_rate_is_per_task_not_per_attempt():

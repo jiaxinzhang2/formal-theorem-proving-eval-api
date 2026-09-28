@@ -10,19 +10,23 @@ here so a new backend only has to implement :meth:`Verifier._verify`.
 from __future__ import annotations
 
 import abc
-import re
 import time
 from typing import Any, Mapping, Sequence
 
+from .proof_metrics import analyze_proof
+from .soundness import PATTERNS, HackClass, screen_source, strip_comments
+from .tactics import extract_tactics
 from .types import (
     Assembly,
     BackendInfo,
     Diagnostic,
     ErrorKind,
+    ProbeKind,
     ProofAttempt,
     ProofTask,
     Severity,
     SoundnessReport,
+    StatementTask,
     Status,
     VerificationResult,
 )
@@ -31,8 +35,10 @@ __all__ = [
     "Verifier",
     "VerifierError",
     "BackendUnavailable",
+    "RawVerdict",
     "assemble_source",
     "screen_soundness",
+    "strip_comments",
     "PLACEHOLDER_PATTERNS",
 ]
 
@@ -45,66 +51,17 @@ class BackendUnavailable(VerifierError):
     """The prover or service this backend needs is not usable here."""
 
 
-#: Tokens that mean "I did not actually finish this proof", per language.
-#: A prover will happily accept most of these with only a warning, which
-#: is precisely why they need their own check.
+#: Kept for backwards compatibility; the live check set lives in
+#: :mod:`ftp_eval.soundness`, which covers far more than placeholders.
 PLACEHOLDER_PATTERNS: dict[str, tuple[str, ...]] = {
-    "lean4": (r"\bsorry\b", r"\bsorryAx\b", r"\badmit\b", r"\bnative_decide\b"),
-    "lean3": (r"\bsorry\b", r"\bsorryAx\b"),
-    "coq": (r"\bAdmitted\b", r"\badmit\b", r"\bgive_up\b"),
-    "isabelle": (r"\bsorry\b", r"\boops\b"),
-    "axle": (r"\bsorry\b", r"\badmit\b", r"\bTODO\b"),
+    language: tuple(
+        p.pattern.pattern for p in soundness_patterns if p.hack_class is HackClass.PLACEHOLDER
+    )
+    for language, soundness_patterns in (
+        (lang, [p for p in PATTERNS if lang in p.languages])
+        for lang in ("lean4", "lean3", "coq", "isabelle", "axle")
+    )
 }
-
-#: Declarations that let a proof assume its way out of work.
-_AXIOM_PATTERNS: dict[str, tuple[str, ...]] = {
-    "lean4": (r"^\s*(?:@\[[^\]]*\]\s*)?axiom\b", r"^\s*unsafe\s+axiom\b"),
-    "lean3": (r"^\s*axiom\b", r"^\s*constant\b"),
-    "coq": (r"^\s*(?:Axiom|Parameter|Hypothesis|Variable)\b",),
-    "isabelle": (r"^\s*axiomatization\b", r"^\s*consts\b"),
-    "axle": (r"^\s*axiom\b",),
-}
-
-#: Pragmas that turn the prover's own safety rails off.
-_UNSAFE_PATTERNS: dict[str, tuple[str, ...]] = {
-    "lean4": (
-        r"set_option\s+maxHeartbeats\s+0\b",
-        r"set_option\s+checkBinderAnnotations\s+false\b",
-        r"set_option\s+debug\.skipKernelTC\s+true\b",
-        r"^\s*partial\s+def\b",
-    ),
-    "coq": (r"Unset\s+Guard\s+Checking", r"Unset\s+Positivity\s+Checking"),
-}
-
-_COMMENT_STRIPPERS: dict[str, tuple[tuple[str, str], ...]] = {
-    # (regex, replacement) applied in order; block comments first.
-    "lean4": ((r"/-(?:.|\n)*?-/", " "), (r"--[^\n]*", " ")),
-    "lean3": ((r"/-(?:.|\n)*?-/", " "), (r"--[^\n]*", " ")),
-    "coq": ((r"\(\*(?:.|\n)*?\*\)", " "),),
-    "isabelle": ((r"\(\*(?:.|\n)*?\*\)", " "),),
-}
-
-
-def strip_comments(text: str, language: str) -> str:
-    """Remove comments so that soundness checks cannot be commented past.
-
-    Without this, ``-- sorry`` reads as a violation and ``sorry`` hidden
-    inside a ``/- -/`` block reads as clean. Both are wrong.
-    """
-    out = text
-    for pattern, repl in _COMMENT_STRIPPERS.get(language, ()):
-        out = re.sub(pattern, repl, out)
-    return out
-
-
-def _normalize_statement(text: str, language: str) -> str:
-    """Collapse a statement to a form that ignores only harmless edits."""
-    out = strip_comments(text, language)
-    out = re.sub(r"\s+", " ", out)
-    # A trailing `:= by`, `:=`, `:= by sorry` etc. is the seam where the
-    # proof begins, not part of the claim, so it is cut before comparing.
-    out = re.sub(r":=\s*(by\b.*)?$", "", out.strip()).strip()
-    return out.rstrip(":= ").strip()
 
 
 def assemble_source(task: ProofTask, attempt: ProofAttempt) -> str:
@@ -140,47 +97,29 @@ def screen_soundness(
     *,
     check_statement: bool = True,
 ) -> SoundnessReport:
-    """Look for ways the proof could be accepted without being a proof.
+    """Look for every known way a proof gets accepted without proving.
 
-    This runs on the *assembled source*, before and independently of the
-    prover, because several of these tricks produce a clean exit code.
-    It is deliberately syntactic and therefore conservative: it can miss
-    a novel trick, so it is a screen, not a guarantee. Backends that can
-    ask the kernel directly (Lean's ``#print axioms``) should add that
-    evidence on top via :meth:`Verifier.extra_soundness_checks`.
+    Runs on the *assembled source*, before and independently of the
+    prover, because passing the kernel is not the bar: ``sorry`` compiles
+    with only a warning, and a declared ``axiom`` compiles with no
+    complaint at all -- asserting the goal as an axiom is, to the kernel,
+    a perfectly well-formed thing to do.
+
+    Syntactic and therefore incomplete: see :mod:`ftp_eval.soundness` for
+    the full check list and its limits. Backends that can interrogate the
+    kernel add stronger evidence through
+    :meth:`Verifier.extra_soundness_checks` -- the Lean backend's
+    ``#print axioms`` audit catches a ``sorry`` reached through a helper
+    lemma that no regex here would ever see.
     """
-    language = task.language
-    report = SoundnessReport()
-    body = strip_comments(source, language)
-
-    for pattern in PLACEHOLDER_PATTERNS.get(language, ()):
-        if re.search(pattern, body):
-            token = pattern.strip("\\b")
-            report = report.with_violation("proof contains placeholder %r" % token)
-
-    for pattern in _AXIOM_PATTERNS.get(language, ()):
-        if re.search(pattern, body, flags=re.MULTILINE):
-            report = report.with_violation(
-                "proof declares a new axiom/assumption, which can assume the goal"
-            )
-            break
-
-    for pattern in _UNSAFE_PATTERNS.get(language, ()):
-        if re.search(pattern, body, flags=re.MULTILINE):
-            report = report.with_violation(
-                "proof disables a prover safety check (%s)" % pattern
-            )
-
-    if check_statement and task.assembly is not Assembly.CONTINUE_STATEMENT:
-        # Under CONTINUE_STATEMENT the statement is ours by construction;
-        # in the other modes the model supplied it and may have changed it.
-        wanted = _normalize_statement(task.formal_statement, language)
-        if wanted and wanted not in _normalize_statement(source, language):
-            report = report.with_violation(
-                "submitted source does not contain the required statement verbatim"
-            )
-
-    return report
+    # Under CONTINUE_STATEMENT the harness concatenated the statement
+    # itself, so tampering and shadowing are impossible by construction.
+    required = (
+        task.formal_statement
+        if check_statement and task.assembly is not Assembly.CONTINUE_STATEMENT
+        else None
+    )
+    return screen_source(source, task.language, required_statement=required)
 
 
 class Verifier(abc.ABC):
@@ -249,6 +188,12 @@ class Verifier(abc.ABC):
     ) -> VerificationResult:
         budget = task.timeout_s if task.timeout_s is not None else timeout_s
         started = time.monotonic()
+        # Measured before anything can return early, so that a failure, a
+        # timeout and a harness error all carry the same structural record
+        # as a success. Comparing the shape of failures against the shape
+        # of passes is most of the analytical value here.
+        tactics = extract_tactics(attempt.proof, task.language)
+        structure = analyze_proof(attempt.proof, task.language).to_dict()
 
         def finish(
             status: Status,
@@ -256,6 +201,7 @@ class Verifier(abc.ABC):
             soundness: SoundnessReport | None = None,
             diagnostics: Sequence[Diagnostic] = (),
             raw: Mapping[str, Any] | None = None,
+            compile_time_s: float | None = None,
         ) -> VerificationResult:
             return VerificationResult(
                 task_id=task.task_id,
@@ -266,9 +212,12 @@ class Verifier(abc.ABC):
                 soundness=soundness or SoundnessReport(),
                 diagnostics=tuple(diagnostics),
                 wall_time_s=time.monotonic() - started,
+                compile_time_s=compile_time_s,
                 model=attempt.model,
                 sample_index=attempt.sample_index,
                 split=task.split,
+                tactics=tactics,
+                structure=structure,
                 raw=dict(raw or {}),
             )
 
@@ -351,7 +300,118 @@ class Verifier(abc.ABC):
             # Accepted by the prover but not a proof of what was asked.
             status, error_kind = Status.REJECTED, ErrorKind.SOUNDNESS
 
-        return finish(status, error_kind, soundness, verdict.diagnostics, verdict.raw)
+        return finish(
+            status,
+            error_kind,
+            soundness,
+            verdict.diagnostics,
+            verdict.raw,
+            verdict.compile_time_s,
+        )
+
+    # -- statement probes ---------------------------------------------
+
+    def build_probe(self, task: StatementTask, kind: ProbeKind) -> str | None:
+        """Build a source file that asks the prover one thing about a statement.
+
+        Return ``None`` when this backend cannot construct that probe --
+        the language is unsupported, or the statement does not parse well
+        enough to take apart. ``None`` makes the corresponding check
+        report "did not run", which is honest; a guessed probe would
+        report a confident wrong answer.
+
+        Implemented by :class:`~ftp_eval.backends.lean4.Lean4Verifier`.
+        """
+        return None
+
+    def probe(
+        self,
+        task: StatementTask,
+        source: str,
+        *,
+        timeout_s: float = 120.0,
+    ) -> VerificationResult:
+        """Compile an arbitrary source, skipping soundness screening.
+
+        Probes are questions, not proof attempts. The elaboration probe
+        deliberately submits a ``sorry`` body and the vacuity probe
+        deliberately tries to derive ``False``; screening either one would
+        reject every probe and tell us nothing. Callers must therefore not
+        treat a probe's ``VERIFIED`` as a proof of anything except the
+        property the probe was built to test.
+        """
+        budget = task.timeout_s if task.timeout_s is not None else timeout_s
+        started = time.monotonic()
+        proof_task = ProofTask(
+            task_id=task.task_id,
+            formal_statement=task.formal_statement,
+            header=task.header,
+            language=task.language,
+            assembly=Assembly.FULL_FILE,
+            split=task.split,
+        )
+        attempt = ProofAttempt(task_id=task.task_id, proof=source, attempt_id="%s#probe" % task.task_id)
+
+        def finish(
+            status: Status,
+            error_kind: ErrorKind | None,
+            diagnostics: Sequence[Diagnostic] = (),
+            raw: Mapping[str, Any] | None = None,
+        ) -> VerificationResult:
+            return VerificationResult(
+                task_id=task.task_id,
+                attempt_id=attempt.attempt_id or task.task_id,
+                backend=self.name,
+                status=status,
+                error_kind=error_kind,
+                diagnostics=tuple(diagnostics),
+                wall_time_s=time.monotonic() - started,
+                split=task.split,
+                raw=dict(raw or {}),
+            )
+
+        if task.language != self.language:
+            return finish(
+                Status.SKIPPED,
+                ErrorKind.HARNESS,
+                [
+                    Diagnostic(
+                        Severity.ERROR,
+                        "statement language %r does not match backend %r"
+                        % (task.language, self.name),
+                        kind=ErrorKind.HARNESS,
+                    )
+                ],
+            )
+
+        try:
+            verdict = self._verify(proof_task, attempt, source, budget)
+        except BackendUnavailable as exc:
+            return finish(
+                Status.ERROR,
+                ErrorKind.TOOLCHAIN,
+                [Diagnostic(Severity.ERROR, str(exc), kind=ErrorKind.TOOLCHAIN)],
+            )
+        except VerifierError as exc:
+            return finish(
+                Status.ERROR,
+                ErrorKind.HARNESS,
+                [Diagnostic(Severity.ERROR, str(exc), kind=ErrorKind.HARNESS)],
+            )
+        except Exception as exc:  # pragma: no cover - defensive
+            return finish(
+                Status.ERROR,
+                ErrorKind.HARNESS,
+                [
+                    Diagnostic(
+                        Severity.ERROR,
+                        "%s: %s" % (type(exc).__name__, exc),
+                        kind=ErrorKind.HARNESS,
+                    )
+                ],
+            )
+
+        return finish(verdict.status, verdict.error_kind, verdict.diagnostics, verdict.raw)
 
     # -- convenience --------------------------------------------------
 
@@ -368,7 +428,7 @@ class Verifier(abc.ABC):
 class RawVerdict:
     """A backend's report before soundness and timing are folded in."""
 
-    __slots__ = ("status", "error_kind", "diagnostics", "raw")
+    __slots__ = ("status", "error_kind", "diagnostics", "raw", "compile_time_s")
 
     def __init__(
         self,
@@ -376,15 +436,22 @@ class RawVerdict:
         error_kind: ErrorKind | None = None,
         diagnostics: Sequence[Diagnostic] = (),
         raw: Mapping[str, Any] | None = None,
+        compile_time_s: float | None = None,
     ) -> None:
         self.status = status
         self.error_kind = error_kind
         self.diagnostics = tuple(diagnostics)
         self.raw: Mapping[str, Any] = dict(raw or {})
+        #: The prover's own time, excluding harness overhead. Backends that
+        #: shell out should report the subprocess duration here; it is
+        #: usually the dominant cost of a run and the thing worth tuning.
+        self.compile_time_s = compile_time_s
 
     @classmethod
-    def verified(cls, raw: Mapping[str, Any] | None = None) -> "RawVerdict":
-        return cls(Status.VERIFIED, raw=raw)
+    def verified(
+        cls, raw: Mapping[str, Any] | None = None, compile_time_s: float | None = None
+    ) -> "RawVerdict":
+        return cls(Status.VERIFIED, raw=raw, compile_time_s=compile_time_s)
 
     @classmethod
     def failed(
@@ -392,16 +459,20 @@ class RawVerdict:
         error_kind: ErrorKind = ErrorKind.UNKNOWN,
         diagnostics: Sequence[Diagnostic] = (),
         raw: Mapping[str, Any] | None = None,
+        compile_time_s: float | None = None,
     ) -> "RawVerdict":
-        return cls(Status.FAILED, error_kind, diagnostics, raw)
+        return cls(Status.FAILED, error_kind, diagnostics, raw, compile_time_s)
 
     @classmethod
-    def timeout(cls, raw: Mapping[str, Any] | None = None) -> "RawVerdict":
+    def timeout(
+        cls, raw: Mapping[str, Any] | None = None, compile_time_s: float | None = None
+    ) -> "RawVerdict":
         return cls(
             Status.TIMEOUT,
             ErrorKind.TIMEOUT,
             [Diagnostic(Severity.ERROR, "verification timed out", kind=ErrorKind.TIMEOUT)],
             raw,
+            compile_time_s,
         )
 
     def __repr__(self) -> str:

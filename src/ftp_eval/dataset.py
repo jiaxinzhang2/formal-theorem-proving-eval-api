@@ -10,10 +10,11 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 from pathlib import Path
-from typing import Any, Callable, Iterable, Iterator, Sequence, TypeVar
+from typing import Any, Callable, Iterable, Iterator, Mapping, Sequence, TypeVar
 
-from .types import ProofAttempt, ProofTask, VerificationResult
+from .types import ProofAttempt, ProofTask, StatementTask, VerificationResult
 
 __all__ = [
     "read_jsonl",
@@ -21,8 +22,10 @@ __all__ = [
     "load_tasks",
     "load_attempts",
     "load_results",
+    "load_triplets",
     "ResultWriter",
     "attempts_from_samples",
+    "already_done",
 ]
 
 T = TypeVar("T")
@@ -149,6 +152,147 @@ def attempts_from_samples(
         ProofAttempt(task_id=task_id, proof=text, model=model, sample_index=i)
         for i, text in enumerate(samples)
     ]
+
+
+def load_triplets(
+    informal_path: str | os.PathLike[str],
+    formal_path: str | os.PathLike[str],
+    proof_path: str | os.PathLike[str] | None = None,
+    *,
+    language: str = "lean4",
+    id_field: str = "task_id",
+) -> tuple[list[StatementTask], list[ProofAttempt]]:
+    """Load the three-file layout: problem text, formalization, proof.
+
+    Each file is JSONL keyed by ``task_id``; they are joined on that id,
+    not on line order, because three files that drift out of alignment
+    would silently pair every problem with the wrong formalization.
+
+    Returns statement tasks (problem + formalization, for
+    :class:`~ftp_eval.statement.StatementChecker`) and proof attempts (for
+    the verifier). ``proof_path`` may be omitted to check formalizations
+    alone.
+
+    Recognized field names, in order of preference:
+
+    * informal: ``informal_statement``, ``problem``, ``statement``, ``nl``, ``text``
+    * formal:   ``formal_statement``, ``formal``, ``statement``, ``theorem``
+    * proof:    ``proof``, ``formal_proof``, ``completion``, ``output``
+    """
+    informal = _index_by_id(informal_path, id_field, "informal")
+    formal = _index_by_id(formal_path, id_field, "formal")
+    proofs = _index_by_id(proof_path, id_field, "proof") if proof_path else {}
+
+    missing_formal = sorted(set(informal) - set(formal))
+    if missing_formal:
+        raise ValueError(
+            "%s: %d problem(s) have no formalization (e.g. %s)"
+            % (formal_path, len(missing_formal), ", ".join(missing_formal[:5]))
+        )
+    orphan_formal = sorted(set(formal) - set(informal))
+    if orphan_formal:
+        # Not fatal: a formalization without its prose can still be proof
+        # checked, it just cannot be judged for faithfulness.
+        print(
+            "warning: %d formalization(s) have no natural-language problem (e.g. %s); "
+            "their faithfulness cannot be assessed"
+            % (len(orphan_formal), ", ".join(orphan_formal[:5])),
+            file=sys.stderr,
+        )
+
+    statement_tasks: list[StatementTask] = []
+    attempts: list[ProofAttempt] = []
+
+    for task_id in sorted(set(formal)):
+        formal_row = formal[task_id]
+        informal_row = informal.get(task_id, {})
+        statement_tasks.append(
+            StatementTask(
+                task_id=task_id,
+                informal_statement=_first_field(
+                    informal_row,
+                    ("informal_statement", "problem", "statement", "nl", "text"),
+                    default="",
+                ),
+                formal_statement=_first_field(
+                    formal_row,
+                    ("formal_statement", "formal", "statement", "theorem"),
+                    required=True,
+                    what="formal statement",
+                    task_id=task_id,
+                ),
+                header=str(formal_row.get("header") or ""),
+                language=str(formal_row.get("language") or language),
+                gold_formal_statement=formal_row.get("gold_formal_statement"),
+                split=formal_row.get("split") or informal_row.get("split"),
+                metadata={
+                    **{k: v for k, v in informal_row.items() if k != id_field},
+                    **{k: v for k, v in formal_row.items() if k != id_field},
+                },
+            )
+        )
+        proof_rows = proofs.get(task_id)
+        if proof_rows is None:
+            continue
+        for index, row in enumerate(proof_rows if isinstance(proof_rows, list) else [proof_rows]):
+            attempts.append(
+                ProofAttempt(
+                    task_id=task_id,
+                    proof=_first_field(
+                        row,
+                        ("proof", "formal_proof", "completion", "output"),
+                        required=True,
+                        what="proof",
+                        task_id=task_id,
+                    ),
+                    model=row.get("model"),
+                    sample_index=int(row.get("sample_index", index) or index),
+                    metadata={k: v for k, v in row.items() if k != id_field},
+                )
+            )
+    return statement_tasks, attempts
+
+
+def _index_by_id(
+    path: str | os.PathLike[str], id_field: str, what: str
+) -> dict[str, Any]:
+    """Index a JSONL file by id, collecting repeats into lists."""
+    out: dict[str, Any] = {}
+    for lineno, obj in enumerate(read_jsonl(path), start=1):
+        task_id = obj.get(id_field) or obj.get("id") or obj.get("name")
+        if not task_id:
+            raise ValueError(
+                "%s:%d: %s record has no %r field to join on"
+                % (path, lineno, what, id_field)
+            )
+        task_id = str(task_id)
+        if task_id in out:
+            existing = out[task_id]
+            out[task_id] = (existing if isinstance(existing, list) else [existing]) + [obj]
+        else:
+            out[task_id] = [obj] if what == "proof" else obj
+    return out
+
+
+def _first_field(
+    row: Mapping[str, Any],
+    names: Sequence[str],
+    *,
+    default: str | None = None,
+    required: bool = False,
+    what: str = "field",
+    task_id: str = "?",
+) -> str:
+    for name in names:
+        value = row.get(name)
+        if isinstance(value, str) and value.strip():
+            return value
+    if required:
+        raise ValueError(
+            "task %r: no %s found; looked for %s, got keys %s"
+            % (task_id, what, "/".join(names), ", ".join(sorted(row)[:10]))
+        )
+    return default or ""
 
 
 def already_done(path: str | os.PathLike[str]) -> set[str]:

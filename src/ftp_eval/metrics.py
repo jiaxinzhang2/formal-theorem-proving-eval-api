@@ -19,6 +19,16 @@ from collections import Counter, defaultdict
 from dataclasses import dataclass, field
 from typing import Any, Iterable, Mapping, Sequence
 
+from .proof_metrics import (
+    Distribution,
+    SampleDuplication,
+    StructureStats,
+    aggregate_structure,
+    distribution,
+    sample_duplication,
+)
+from .soundness import parse_label
+from .tactics import TacticStats, tactic_stats
 from .types import ErrorKind, Status, VerificationResult
 
 __all__ = ["pass_at_k", "estimate_pass_at_k", "TaskOutcome", "Summary", "summarize", "compare"]
@@ -129,8 +139,29 @@ class Summary:
     soundness_violations: dict[str, int] = field(default_factory=dict)
     total_wall_time_s: float = 0.0
     median_wall_time_s: float = 0.0
+    #: Distribution of the prover's own compile time, when backends report
+    #: it. Usually the dominant cost, and the one worth tuning; comparing
+    #: its total against ``total_wall_time_s`` shows harness overhead.
+    compile_time: Distribution = field(default_factory=Distribution)
+    #: Compile-time distribution restricted to accepted proofs. A failure
+    #: that times out costs the full budget, so pooling the two hides how
+    #: long a *successful* check actually takes.
+    compile_time_verified: Distribution = field(default_factory=Distribution)
     by_split: dict[str, dict[str, Any]] = field(default_factory=dict)
+    #: Per-sample-position pass rate, ``{0: 0.42, 1: 0.39, ...}``. A steep
+    #: decline means later samples are much worse, which is worth knowing
+    #: before you pay for k=10; a flat line means extra samples are
+    #: genuinely independent draws.
+    by_sample_index: dict[int, float] = field(default_factory=dict)
     per_task: list[TaskOutcome] = field(default_factory=list)
+    tactics: TacticStats = field(default_factory=TacticStats)
+    structure: StructureStats = field(default_factory=StructureStats)
+    duplication: SampleDuplication = field(default_factory=SampleDuplication)
+    #: Reward-hacking classes seen, e.g. ``{"placeholder": 3, "new_axiom": 1}``.
+    hack_classes: dict[str, int] = field(default_factory=dict)
+    #: The specific trick, e.g. ``{"lean.sorry": 14, "kernel.sorry_ax": 2}``.
+    #: More actionable than the class: it names what to forbid next.
+    hack_patterns: dict[str, int] = field(default_factory=dict)
 
     @property
     def solve_rate(self) -> float:
@@ -141,6 +172,19 @@ class Summary:
     def attempt_pass_rate(self) -> float:
         """Fraction of scoreable *attempts* that verified."""
         return self.verified / self.scoreable_attempts if self.scoreable_attempts else 0.0
+
+    @property
+    def seconds_per_solved_task(self) -> float | None:
+        """Wall clock spent per task actually solved.
+
+        The efficiency number that matters when comparing configurations:
+        a setup that solves 5% more at four times the cost is a different
+        trade from one that solves 5% more for free. ``None`` when nothing
+        was solved, rather than infinity.
+        """
+        if not self.solved_tasks:
+            return None
+        return self.total_wall_time_s / self.solved_tasks
 
     @property
     def integrity_ok(self) -> bool:
@@ -173,15 +217,31 @@ class Summary:
             "pass_at": {"pass@%d" % k: round(v, 6) for k, v in sorted(self.pass_at.items())},
             "error_kinds": self.error_kinds,
             "soundness_violations": self.soundness_violations,
+            "hack_classes": self.hack_classes,
+            "hack_patterns": self.hack_patterns,
+            "tactics": self.tactics.to_dict(),
+            "structure": self.structure.to_dict(),
+            "duplication": self.duplication.to_dict(),
             "integrity_ok": self.integrity_ok,
             "timing": {
                 "total_wall_time_s": round(self.total_wall_time_s, 3),
                 "median_wall_time_s": round(self.median_wall_time_s, 3),
+                "seconds_per_solved_task": (
+                    None
+                    if self.seconds_per_solved_task is None
+                    else round(self.seconds_per_solved_task, 3)
+                ),
+                "compile_time": self.compile_time.to_dict(),
+                "compile_time_verified": self.compile_time_verified.to_dict(),
+                "harness_overhead_s": round(
+                    max(0.0, self.total_wall_time_s - self.compile_time.total), 3
+                ),
             },
             "by_split": self.by_split,
+            "by_sample_index": {str(k): round(v, 6) for k, v in self.by_sample_index.items()},
         }
 
-    def format_text(self) -> str:
+    def format_text(self, *, include_tactics: bool = False) -> str:
         """Human-readable report for the CLI."""
         lines = []
         head = "backend=%s" % (self.backend or "?")
@@ -205,7 +265,16 @@ class Summary:
             ranked = sorted(self.error_kinds.items(), key=lambda kv: -kv[1])
             lines.append("error kinds: " + ", ".join("%s=%d" % kv for kv in ranked))
         if self.soundness_violations:
-            lines.append("SOUNDNESS violations (not counted as passes):")
+            lines.append(
+                "REWARD HACKING detected (%d attempt(s) rejected, not counted as passes):"
+                % self.rejected
+            )
+            if self.hack_classes:
+                ranked = sorted(self.hack_classes.items(), key=lambda kv: -kv[1])
+                lines.append("  by class:   " + ", ".join("%s=%d" % kv for kv in ranked))
+            if self.hack_patterns:
+                ranked = sorted(self.hack_patterns.items(), key=lambda kv: -kv[1])
+                lines.append("  by trick:   " + ", ".join("%s=%d" % kv for kv in ranked))
             for reason, count in sorted(self.soundness_violations.items(), key=lambda kv: -kv[1]):
                 lines.append("  %4d x %s" % (count, reason))
         if self.errored:
@@ -220,7 +289,58 @@ class Summary:
                     "  %-12s solve=%5.1f%%  verified=%d/%d"
                     % (split, 100 * stats["solve_rate"], stats["verified"], stats["scoreable_attempts"])
                 )
-        lines.append("wall time: %.1fs total, %.2fs median/attempt" % (self.total_wall_time_s, self.median_wall_time_s))
+        lines.append(
+            "wall time: %.1fs total, %.2fs median/attempt%s"
+            % (
+                self.total_wall_time_s,
+                self.median_wall_time_s,
+                ""
+                if self.seconds_per_solved_task is None
+                else ", %.1fs per solved task" % self.seconds_per_solved_task,
+            )
+        )
+        if self.compile_time.count:
+            lines.append(
+                "prover time: %.1fs total, median %.2fs, p90 %.2fs, max %.1fs "
+                "(%.1fs harness overhead)"
+                % (
+                    self.compile_time.total,
+                    self.compile_time.median,
+                    self.compile_time.p90,
+                    self.compile_time.maximum,
+                    max(0.0, self.total_wall_time_s - self.compile_time.total),
+                )
+            )
+            if self.compile_time_verified.count:
+                lines.append(
+                    "  accepted proofs compile in median %.2fs, p90 %.2fs"
+                    % (self.compile_time_verified.median, self.compile_time_verified.p90)
+                )
+        if len(self.by_sample_index) > 1:
+            lines.append(
+                "pass rate by sample position: "
+                + ", ".join(
+                    "#%d=%.0f%%" % (i, 100 * rate)
+                    for i, rate in sorted(self.by_sample_index.items())
+                )
+            )
+        if self.duplication.undermines_pass_at_k and self.pass_at:
+            lines.append(
+                "WARNING: samples are %.0f%% duplicated (%d task(s) returned k identical "
+                "proofs). pass@k assumes k independent draws, so the k>1 figures above "
+                "claim more precision than the data supports."
+                % (
+                    100 * self.duplication.mean_duplicate_fraction,
+                    self.duplication.tasks_all_identical,
+                )
+            )
+        if include_tactics:
+            if self.tactics.proofs_measured:
+                lines.append("")
+                lines.append(self.tactics.format_text())
+            if self.structure.proofs:
+                lines.append("")
+                lines.append(self.structure.format_text())
         return "\n".join(lines)
 
 
@@ -261,13 +381,30 @@ def summarize(
     outcomes: dict[str, TaskOutcome] = {}
     error_kinds: Counter[str] = Counter()
     violations: Counter[str] = Counter()
+    hack_classes: Counter[str] = Counter()
+    hack_patterns: Counter[str] = Counter()
+    tactic_entries: list[tuple[Sequence[str], bool, bool]] = []
+    structure_entries: list[tuple[Mapping[str, Any], bool, bool]] = []
+    samples_by_task: dict[str, list[str]] = {}
     times: list[float] = []
+    compile_times: list[float] = []
+    compile_times_verified: list[float] = []
+    by_index_total: Counter[int] = Counter()
+    by_index_verified: Counter[int] = Counter()
     by_split_results: dict[str, list[VerificationResult]] = defaultdict(list)
 
     for r in results:
         summary.attempts += 1
         summary.total_wall_time_s += r.wall_time_s
         times.append(r.wall_time_s)
+        if r.compile_time_s is not None:
+            compile_times.append(r.compile_time_s)
+            if r.status is Status.VERIFIED:
+                compile_times_verified.append(r.compile_time_s)
+        if r.status.counts_toward_pass_rate:
+            by_index_total[r.sample_index] += 1
+            if r.status is Status.VERIFIED:
+                by_index_verified[r.sample_index] += 1
         outcome = outcomes.setdefault(r.task_id, TaskOutcome(task_id=r.task_id, split=r.split))
 
         if r.status is Status.VERIFIED:
@@ -297,6 +434,22 @@ def summarize(
                 outcome.first_error_kind = r.error_kind
         for v in r.soundness.violations:
             violations[v] += 1
+            # Violations are tagged "[class:pattern_id] message" by the
+            # screen, so both roll up without a second lookup.
+            hack_class, pattern_id = parse_label(v)
+            if hack_class:
+                hack_classes[hack_class] += 1
+            if pattern_id:
+                hack_patterns[pattern_id] += 1
+        tactic_entries.append(
+            (r.tactics, r.status is Status.VERIFIED, r.status.counts_toward_pass_rate)
+        )
+        structure_entries.append(
+            (r.structure, r.status is Status.VERIFIED, r.status.counts_toward_pass_rate)
+        )
+        # Fingerprints stand in for proof text, which results do not carry.
+        fingerprint = str((r.structure or {}).get("chars", "")) + "|" + "\u0000".join(r.tactics)
+        samples_by_task.setdefault(r.task_id, []).append(fingerprint)
         if r.split:
             by_split_results[r.split].append(r)
 
@@ -304,7 +457,19 @@ def summarize(
     summary.solved_tasks = sum(1 for o in outcomes.values() if o.solved)
     summary.error_kinds = dict(error_kinds)
     summary.soundness_violations = dict(violations)
+    summary.hack_classes = dict(hack_classes)
+    summary.hack_patterns = dict(hack_patterns)
+    summary.tactics = tactic_stats(tactic_entries)
+    summary.structure = aggregate_structure(structure_entries)
+    summary.duplication = sample_duplication(samples_by_task)
     summary.median_wall_time_s = _median(times)
+    summary.compile_time = distribution(compile_times)
+    summary.compile_time_verified = distribution(compile_times_verified)
+    summary.by_sample_index = {
+        index: by_index_verified[index] / total
+        for index, total in sorted(by_index_total.items())
+        if total
+    }
 
     for k in ks:
         value = pass_at_k(results, k)

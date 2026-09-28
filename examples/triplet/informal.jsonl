@@ -1,0 +1,4 @@
+{"task_id": "nat_add_zero", "split": "valid", "informal_statement": "Show that for every natural number n, n + 0 = n."}
+{"task_id": "sq_nonneg", "split": "valid", "informal_statement": "Show that the square of any real number is non-negative."}
+{"task_id": "lost_content", "split": "test", "informal_statement": "Let n be a positive integer. Show that n^2 >= n."}
+{"task_id": "vacuous_hyps", "split": "test", "informal_statement": "Let n be a natural number with n < 0. Show that n = 5."}

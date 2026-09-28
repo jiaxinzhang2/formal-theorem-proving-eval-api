@@ -14,7 +14,16 @@ from typing import Any, Callable, Iterator
 
 from .verifier import Verifier
 
-__all__ = ["register", "unregister", "create", "available", "load_entry_points"]
+__all__ = [
+    "register",
+    "unregister",
+    "create",
+    "available",
+    "load_entry_points",
+    "register_judge",
+    "create_judge",
+    "available_judges",
+]
 
 #: name -> zero-arg-constructible factory taking **config
 _REGISTRY: dict[str, Callable[..., Verifier]] = {}
@@ -96,3 +105,58 @@ def available() -> Iterator[str]:
     """All backend names that can be resolved, builtin or registered."""
     load_entry_points()
     return iter(sorted(set(_REGISTRY) | set(_BUILTINS)))
+
+
+# ---------------------------------------------------------------------
+# Judges
+#
+# A separate namespace from backends on purpose: a backend answers "does
+# this proof close this goal?" and a judge answers "does this goal say
+# what the problem said?". Conflating them would make `--backend claude`
+# look like a prover, which it is not.
+# ---------------------------------------------------------------------
+
+_JUDGES: dict[str, Callable[..., Any]] = {}
+
+_BUILTIN_JUDGES: dict[str, tuple[str, str]] = {
+    "mock": ("ftp_eval.judge", "MockJudge"),
+    "claude": ("ftp_eval.judges.claude", "ClaudeJudge"),
+}
+
+
+def register_judge(name: str, factory: Callable[..., Any], *, overwrite: bool = False) -> None:
+    if not overwrite and name in _JUDGES:
+        raise ValueError("judge %r is already registered" % name)
+    _JUDGES[name] = factory
+
+
+def create_judge(name: str, *, consensus: int = 1, recheck: int = 2, **config: Any) -> Any:
+    """Instantiate a judge, optionally wrapped in consensus voting.
+
+    ``consensus > 1`` wraps it in
+    :class:`~ftp_eval.judge.ConsensusJudge`, which votes across samples
+    and re-examines its own rejections before letting one stand.
+    """
+    if name in _JUDGES:
+        factory = _JUDGES[name]
+    elif name in _BUILTIN_JUDGES:
+        module_name, attr = _BUILTIN_JUDGES[name]
+        try:
+            factory = getattr(importlib.import_module(module_name), attr)
+        except Exception as exc:
+            raise ImportError("judge %r failed to import: %s" % (name, exc)) from exc
+        _JUDGES[name] = factory
+    else:
+        known = ", ".join(sorted(set(_JUDGES) | set(_BUILTIN_JUDGES)))
+        raise KeyError("unknown judge %r; known judges: %s" % (name, known))
+
+    judge = factory(**config)
+    if consensus > 1:
+        from .judge import ConsensusJudge
+
+        return ConsensusJudge(judge, samples=consensus, recheck_rejections=recheck)
+    return judge
+
+
+def available_judges() -> Iterator[str]:
+    return iter(sorted(set(_JUDGES) | set(_BUILTIN_JUDGES)))

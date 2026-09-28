@@ -22,21 +22,44 @@ from .dataset import (
     load_attempts,
     load_results,
     load_tasks,
+    load_triplets,
     read_jsonl,
     write_jsonl,
 )
+from .judge import ConsensusJudge, Judge, JudgeError, MockJudge
 from .metrics import Summary, estimate_pass_at_k, pass_at_k, summarize
-from .registry import available, create, register
+from .pipeline import EndToEndResult, EndToEndRunner, EndToEndStatus
+from .proof_metrics import ProofStructure, analyze_proof
+from .registry import (
+    available,
+    available_judges,
+    create,
+    create_judge,
+    register,
+    register_judge,
+)
 from .runner import EvalRunner, ProgressEvent, ResultCache, RunConfig
+from .soundness import HackClass, audit_axioms, screen_source
+from .statement import StatementChecker
+from .tactics import extract_tactics
 from .types import (
     Assembly,
     BackendInfo,
+    Check,
+    CheckKind,
     Diagnostic,
     ErrorKind,
+    JudgeLabel,
+    JudgeUsage,
+    JudgeVerdict,
+    ProbeKind,
     ProofAttempt,
     ProofTask,
     Severity,
     SoundnessReport,
+    StatementStatus,
+    StatementTask,
+    StatementVerdict,
     Status,
     VerificationResult,
 )
@@ -90,4 +113,36 @@ __all__ = [
     "Summary",
     "pass_at_k",
     "estimate_pass_at_k",
+    # reward-hacking detection
+    "HackClass",
+    "screen_source",
+    "audit_axioms",
+    # analysis
+    "extract_tactics",
+    "analyze_proof",
+    "ProofStructure",
+    # statement checking
+    "StatementTask",
+    "StatementChecker",
+    "StatementVerdict",
+    "StatementStatus",
+    "Check",
+    "CheckKind",
+    "ProbeKind",
+    "load_triplets",
+    # judges
+    "Judge",
+    "JudgeError",
+    "MockJudge",
+    "ConsensusJudge",
+    "JudgeLabel",
+    "JudgeVerdict",
+    "JudgeUsage",
+    "create_judge",
+    "register_judge",
+    "available_judges",
+    # end-to-end
+    "EndToEndRunner",
+    "EndToEndResult",
+    "EndToEndStatus",
 ]

@@ -41,12 +41,30 @@ jobs:
       - name: Smoke test the pipeline
         run: |
           ftp-eval backends
+          ftp-eval judges
           ftp-eval doctor -b mock --smoke
+          # --strict must fail here: the fixtures contain a `sorry` proof.
           if ftp-eval verify -b mock \
                --tasks examples/tasks.jsonl \
                --attempts examples/attempts.jsonl \
                --out /tmp/results.jsonl --k 1,2 --strict --quiet; then
-            echo "expected a non-zero exit: the fixtures contain an unsound proof"
+            echo "expected a non-zero exit: the fixtures contain reward hacking"
             exit 1
           fi
-          ftp-eval score /tmp/results.jsonl --k 1,2
+          ftp-eval score /tmp/results.jsonl --k 1,2 --tactics
+
+      # Both links over the three-file layout. The fixtures include a
+      # valid proof of an unfaithful statement, so eval-all must report
+      # `proved_wrong_statement` rather than counting it as solved.
+      - name: Smoke test statement checking and end-to-end
+        run: |
+          ftp-eval check-statement --judge mock --yes -b mock \
+            --informal examples/triplet/informal.jsonl \
+            --formal examples/triplet/formal.jsonl --quiet
+          ftp-eval eval-all -b mock --judge mock --yes \
+            --informal examples/triplet/informal.jsonl \
+            --formal examples/triplet/formal.jsonl \
+            --proofs examples/triplet/proof.jsonl \
+            --out /tmp/combined.jsonl --quiet | tee /tmp/combined.txt
+          grep -q "proved_wrong_statement" /tmp/combined.txt || {
+            echo "expected the unfaithful-statement fixture to be caught"; exit 1; }
