@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import os
 import json
+import uuid
 import re
 import hashlib
 import shutil
@@ -54,7 +55,7 @@ __all__ = [
 
 #: ``file.lean:12:4: error: message`` -- Lean's standard message prefix.
 _MESSAGE_RE = re.compile(
-    r"^(?P<file>[^\s:]+):(?P<line>\d+):(?P<col>\d+):\s*(?P<severity>error|warning|info):\s*(?P<msg>.*)$"
+    r"^(?P<file>.+):(?P<line>\d+):(?P<col>\d+):\s*(?P<severity>error|warning|info)(?:\([^)]*\))?:\s*(?P<msg>.*)$"
 )
 
 #: Ordered, first match wins. Ordering matters: "unknown identifier" is
@@ -576,7 +577,8 @@ class Lean4Verifier(Verifier):
         cache_root = root / "cache"
         runs = root / "run"
         runs.mkdir(parents=True, exist_ok=True)
-        run_root = Path(tempfile.mkdtemp(prefix="answer-", dir=runs))
+        run_root = runs / ("answer-" + uuid.uuid4().hex)
+        run_root.mkdir()
         started = time.monotonic()
         search: list[Path] = []
         reused = False
@@ -608,6 +610,9 @@ class Lean4Verifier(Verifier):
                 if outcome is not None:
                     outcome.compile_time_s = time.monotonic() - started
                     outcome.reused_cache = reused
+                    outcome.raw = {**outcome.raw, "module_sources": {
+                        m.module: self._with_options(m.source) for m in modules
+                    }}
                     return outcome
 
             audited = self._audit_last(
@@ -616,6 +621,9 @@ class Lean4Verifier(Verifier):
             )
             audited.compile_time_s = time.monotonic() - started
             audited.reused_cache = reused
+            audited.raw = {**audited.raw, "module_sources": {
+                m.module: self._with_options(m.source) for m in modules
+            }}
             return audited
         finally:
             if not self.keep_sources:
@@ -687,7 +695,7 @@ class Lean4Verifier(Verifier):
                 failed_module=module.module,
                 diagnostics=diagnostics,
                 error_kind=errors[0].kind if errors else ErrorKind.UNKNOWN,
-                raw={"exit_code": proc.returncode, "log": log[-4000:]},
+                raw={"exit_code": proc.returncode, "log": log},
             )
         return None
 
@@ -727,7 +735,7 @@ class Lean4Verifier(Verifier):
             Status.VERIFIED,
             axioms=None if listing is None else tuple(listing),
             diagnostics=tuple(parse_lean_log(log)),
-            raw={"log": log[-4000:]},
+            raw={"log": log},
         )
 
     def _run_lean(

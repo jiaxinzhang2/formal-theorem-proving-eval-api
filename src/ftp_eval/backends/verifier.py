@@ -2,7 +2,7 @@
 
 A backend has to answer exactly one question -- "does this proof close
 this goal?" -- and answer it in the shared vocabulary of
-:mod:`ftp_eval.types`. Everything that is the same for all provers
+:mod:`ftp_eval.backends.types`. Everything that is the same for all provers
 (source assembly, soundness screening, timing, error wrapping) lives
 here so a new backend only has to implement :meth:`Verifier._verify`.
 """
@@ -91,7 +91,7 @@ def screen_soundness(
     complaint at all -- asserting the goal as an axiom is, to the kernel,
     a perfectly well-formed thing to do.
 
-    Syntactic and therefore incomplete: see :mod:`ftp_eval.soundness` for
+    Syntactic and therefore incomplete: see :mod:`ftp_eval.backends.soundness` for
     the full check list and its limits. Backends that can interrogate the
     kernel add stronger evidence through
     :meth:`Verifier.extra_soundness_checks` -- the Lean backend's
@@ -113,9 +113,9 @@ class Verifier(abc.ABC):
 
     Subclasses implement :meth:`_verify` (and usually :meth:`info`), and
     get source assembly, soundness screening, timing and error handling
-    for free. ``verify`` is the only method callers should use, and it
-    must never raise: a broken prover is reported as ``Status.ERROR`` so
-    that one bad task cannot abort a 500-task evaluation.
+    for free. ``verify`` is the low-level proof-attempt entry point: a broken
+    prover is reported as ``Status.ERROR`` so one bad task cannot abort an
+    evaluation. Frozen benchmark grading uses ``build_modules`` instead.
     """
 
     #: Registry name, e.g. ``"lean4"``.

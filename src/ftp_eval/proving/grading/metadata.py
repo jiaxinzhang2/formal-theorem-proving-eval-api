@@ -162,8 +162,9 @@ def parse_problem_metadata(source: str, *, problem_id: str = "") -> ProblemMetad
 
     parsed = parse_lean_file(source)
     statements = parsed.statements()
-    if statements:
-        target = statements[0]
+    frozen_target = next((d for d in parsed.declarations if d.qualified_name == "Problem.Target"), None)
+    target = frozen_target or (statements[0] if statements else None)
+    if target is not None:
         metadata.theorem_name = target.qualified_name
         metadata.categories = target.categories
         metadata.ams_tags = target.ams_tags
@@ -244,6 +245,12 @@ def observed_toolchain(verifier: Any) -> dict[str, Any]:
         "version": info.version,
         "detail": info.detail,
     }
+    if getattr(verifier, "language", None) == "lean4":
+        observed["compiler_options"] = {
+            key: getattr(verifier, key)
+            for key in ("memory_mb", "max_heartbeats", "extra_args")
+            if hasattr(verifier, key)
+        }
     project = getattr(verifier, "project_dir", None)
     if project is not None:
         observed["project_dir"] = str(project)

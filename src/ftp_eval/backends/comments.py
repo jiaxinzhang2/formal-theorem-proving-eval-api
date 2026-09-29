@@ -3,7 +3,7 @@
 One function, deliberately. All three layers need to ignore comments --
 the reward-hacking screen, tactic extraction and the structural metrics --
 and before this existed they all imported it from
-:mod:`ftp_eval.soundness`, which implied the analysis code depended on the
+:mod:`ftp_eval.backends.soundness`, which implied the analysis code depended on the
 reward-hacking screen when in fact both merely need to skip comments.
 
 Comment handling has to be exactly right in *both* directions, which is

@@ -399,7 +399,8 @@ def _namespace_faults(parsed: LeanFile) -> list[tuple[InterfaceFault, str]]:
         d.qualified_name
         for d in parsed.declarations
         if d.name
-        and not d.namespace.startswith(SUBMISSION_NAMESPACE)
+        and d.namespace != SUBMISSION_NAMESPACE
+        and not d.namespace.startswith(SUBMISSION_NAMESPACE + ".")
         and d.namespace != PROBLEM_NAMESPACE
         and not d.namespace.startswith(PROBLEM_NAMESPACE + ".")
     ]
@@ -447,12 +448,11 @@ def _import_faults(
     The problem's own module is always allowed -- importing it is how an
     answer reaches the target at all.
     """
-    permitted = {problem_module, *allowed} if problem_module else set(allowed)
     bad = [
         module
         for module in parsed.imports()
-        if not any(
-            module == ok or module.startswith(ok + ".") for ok in permitted if ok
+        if module != problem_module and not any(
+            module == ok or module.startswith(ok + ".") for ok in allowed if ok
         )
     ]
     if not bad:
@@ -524,6 +524,8 @@ def check_arguments(
     """
     if problem.gold_arguments:
         return problem.gold_arguments, True
+    if not problem.wants_value:
+        return (), True
     return report.submitted_arguments, False
 
 

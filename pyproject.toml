@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "formal-theorem-proving-eval-api"
 version = "0.1.0"
-description = "A unified verifier API for evaluating formal theorem-proving models (Lean 4 and pluggable backends)."
+description = "A Lean 4 evaluation framework for theorem-proving models, with frozen targets, proof verification, and reproducible run records."
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
@@ -16,7 +16,8 @@ keywords = [
   "formal-verification",
   "evaluation",
   "benchmark",
-  "pass-at-k",
+  "axiom-audit",
+  "reproducibility",
 ]
 classifiers = [
   "Development Status :: 3 - Alpha",
@@ -33,6 +34,7 @@ classifiers = [
 dependencies = []
 
 [project.optional-dependencies]
+judge = ["anthropic"]
 dev = ["pytest>=7.0", "mypy>=1.8", "ruff>=0.4"]
 
 [project.scripts]
@@ -51,6 +53,7 @@ where = ["src"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+pythonpath = ["src"]
 addopts = "-q"
 
 [tool.ruff]
@@ -66,4 +69,10 @@ ignore = ["E501"]
 [tool.mypy]
 python_version = "3.10"
 packages = ["ftp_eval"]
+mypy_path = ["src"]
 warn_unused_ignores = true
+
+# The optional judge SDK is not required for core development/type checks.
+[[tool.mypy.overrides]]
+module = ["anthropic", "anthropic.*"]
+ignore_missing_imports = true

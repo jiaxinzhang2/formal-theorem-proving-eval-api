@@ -6,7 +6,7 @@ from collections import Counter
 from dataclasses import dataclass, field
 from typing import Any, Sequence
 
-from .stages import GradedAnswer, Stage, StageStatus
+from .results import GradedAnswer, Stage, StageStatus
 
 __all__ = ["ProblemStatistics", "ContestStatistics", "summarize_contest"]
 
@@ -182,7 +182,7 @@ def summarize_contest(
 
         from ...backends.soundness import parse_label
 
-        violations = []
+        violations: list[str] = []
         if answer.report:
             violations.extend(detail for fault, detail in answer.report.faults if fault.value == "reward_hacking")
         if answer.axiom_audit:

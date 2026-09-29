@@ -23,11 +23,11 @@ from .metadata import (
     reconcile_toolchain,
 )
 from ...spec.benchmark import Benchmark, BenchmarkProblem
-from ...backends.types import Diagnostic, Severity, Status
+from ...backends.types import Diagnostic, Severity, Status, ModuleSource
 from ..lean_file import parse_lean_file
 from ..analysis.measure import proof_metrics
 from ..analysis.modes import classify_failure, classify_success
-from .stages import GradedAnswer
+from .results import GradedAnswer
 from .statistics import ContestStatistics, summarize_contest
 
 __all__ = [
@@ -82,7 +82,7 @@ class ProblemSet(Benchmark):
         return BenchmarkProblem(
             problem_id=problem_id,
             source=self.problems[problem_id],
-            target=entry.theorem_name or None if entry is not None else None,
+            target="Problem.Target",
             metadata=entry,
             origin=str(self.root / ("%s.lean" % problem_id)) if self.root else "",
         )
@@ -249,8 +249,8 @@ class ContestResult:
         if stray:
             lines.append("")
             lines.append("unrecognized files (NOT graded, %d):" % len(stray))
-            for participant, filename in stray[:10]:
-                lines.append("  %s/%s" % (participant, filename))
+            for participant_name, filename in stray[:10]:
+                lines.append("  %s/%s" % (participant_name, filename))
         if self.toolchain_warnings:
             lines.append("")
             lines.append("TOOLCHAIN:")
@@ -349,6 +349,7 @@ def grade_answer(
         problem_source, problem_id=problem_id, module=module or "Bench." + problem_id
     )
     problem = replace(problem, gold_arguments=tuple(gold_arguments))
+    ModuleSource(problem.module, problem_source)  # Validate before saving module paths.
     if problem.gold_arguments and len(problem.gold_arguments) != len(problem.target_parameters):
         raise ValueError("%s: gold_arguments must match Target's parameter count" % problem_id)
     answer_module = "FtpSubmission.A" + hashlib.sha256(
@@ -375,6 +376,7 @@ def grade_answer(
         timeout_s=timeout_s, on_stage=checkpoint,
     )
     graded = GradedAnswer(**vars(verdict))
+    assert verdict.report is not None
     arguments, _ = check_arguments(problem, verdict.report)
     graded.modules = {
         **prepared.modules,
@@ -483,9 +485,9 @@ def grade_contest(
                    "unrecognized_files": {s.participant: list(s.unrecognized) for s in submissions}},
         )
 
-    if run_directory is not None:
-        run_directory.write_inputs(problem_set.problems, submissions)
     try:
+        if run_directory is not None:
+            run_directory.write_inputs(problem_set.problems, submissions)
         for submission in submissions:
             participant = ParticipantResult(
                 participant=submission.participant,
@@ -527,7 +529,7 @@ def grade_contest(
             participants=len(submissions),
         )
     
-        result.kernel_checked = bool(result.grades()) and all(g.kernel_checked for g in result.grades())
+        result.kernel_checked = any(g.kernel_checked for g in result.grades())
     
         # Reconciled whether or not a results folder is written: an unverified
         # toolchain is a fact about the run, not about its output.

@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
 
 from ...spec.artifacts import ArtifactWriter
-from .stages import GradedAnswer
+from .results import GradedAnswer
 from .statistics import ContestStatistics
 
 __all__ = ["RunDirectory", "default_run_id"]
@@ -27,13 +27,12 @@ def default_run_id() -> str:
 
 
 def _safe(component: str) -> str:
-    """Make an id safe as a single path component, without collapsing ids.
-
-    Only characters that cannot appear in a path are replaced, so two
-    distinct ids cannot become the same directory.
-    """
-    out = "".join("-" if ch in '<>:"/\\|?*' or ord(ch) < 32 else ch for ch in component)
-    return out.strip() or "unnamed"
+    """Reject path components that could escape or collide after normalization."""
+    if (not component or component in (".", "..") or component != component.strip()
+            or component.endswith(".")
+            or any(ch in '<>:"/\\|?*' or ord(ch) < 32 for ch in component)):
+        raise ValueError("invalid run, participant or problem id: %r" % component)
+    return component
 
 
 def _tsv(rows: Iterable[Sequence[Any]]) -> str:
@@ -50,9 +49,9 @@ class RunDirectory(ArtifactWriter):
     def create(
         cls, base: str | os.PathLike[str], run_id: str | None = None
     ) -> "RunDirectory":
-        root = Path(base) / (run_id or default_run_id())
+        root = Path(base) / _safe(run_id or default_run_id())
         root.mkdir(parents=True, exist_ok=False)
-        for sub in ("1-interface", "2-kernel/probes", "2-kernel/logs", "3-axioms", "4-report", "answers"):
+        for sub in ("1-interface", "2-kernel/logs", "3-axioms", "4-report", "answers"):
             (root / sub).mkdir(parents=True, exist_ok=True)
         writer = cls(root=root)
         for relative in ("events.jsonl", "1-interface/all.jsonl", "1-interface/refused.jsonl",
@@ -202,7 +201,7 @@ class RunDirectory(ArtifactWriter):
 
     def set_state(self, status: str, **fields: Any) -> None:
         manifest = json.loads((self.root / "run.json").read_text(encoding="utf-8"))
-        manifest.update(status=status, **fields)
+        manifest.update(status=status, updated_at=datetime.now(timezone.utc).isoformat(), **fields)
         self._json("run.json", manifest)
 
     def write_modules(self, answer: GradedAnswer) -> None:

@@ -43,7 +43,7 @@ src/ftp_eval/
     lean_file.py          lightweight source parser (not a Lean elaborator)
     grading/
       contest.py          load benchmark/submissions; grade each answer
-      stages.py           interface verdict plus proof metrics
+      results.py          interface verdict plus proof metrics
       artifacts.py        durable stage checkpoints and run outputs
       metadata.py         provenance, manifest, toolchain reconciliation
       statistics.py       aggregate all answers, including refusals

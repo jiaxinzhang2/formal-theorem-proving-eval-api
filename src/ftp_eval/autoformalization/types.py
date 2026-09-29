@@ -2,7 +2,7 @@
 
 None of this is visible to ``proving/``: a proof check never produces a
 ``Check`` or a ``JudgeVerdict``. The vocabulary the two APIs do share --
-what a prover is asked and what it answers -- is in ``shared/types.py``.
+what a prover is asked and what it answers -- is in ``backends/types.py``.
 """
 
 from __future__ import annotations

@@ -34,13 +34,13 @@ jobs:
       # this enforces the absolute budgets and prints the numbers into the
       # log so a slowdown is visible even when it stays under budget.
       - name: Metrics performance budgets
-        run: python tests/measure_speed.py --check
+        run: python scripts/measure_speed.py --check
 
       - name: Lint
-        run: ruff check src tests
+        run: ruff check src tests scripts
 
       - name: Type check
-        run: mypy || true   # advisory for now; not a merge gate
+        run: mypy
 
       # The mock backend exists so CI can exercise the real pipeline
       # without a Lean toolchain.
@@ -65,7 +65,7 @@ jobs:
             echo 'the demo problems are well formed: the sorry is the hole, not a cheat'
             exit 1
           fi
-          # All three demo problems are fully sourced, so there is nothing to
+          # The audit fixture is fully sourced, so there is nothing to
           # report -- which is what makes the next check meaningful.
           if grep -q "no MathDB id" /tmp/audit.txt; then
             echo "the demo problems all record provenance; nothing should be reported"

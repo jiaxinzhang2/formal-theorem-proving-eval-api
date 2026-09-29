@@ -13,12 +13,14 @@ from ftp_eval.backends.verifier import VerifierError
 
 
 @pytest.fixture
-def benchmark(tmp_path):
+def benchmark(tmp_path, monkeypatch):
     """A two-problem benchmark with one honest participant and one cheat.
 
     The shape a real contest has: a folder of problems, a folder per
     participant. MOCK_PASS / MOCK_FAIL steer the mock prover.
     """
+    # Keep the CLI's default run records inside the test's temporary workspace.
+    monkeypatch.chdir(tmp_path)
     problem = """namespace Problem
 -- %s
 def Target : Prop := True
@@ -41,8 +43,7 @@ end Submission
     (honest / "P001.lean").write_text(answer % ("P001", "MOCK_PASS"), encoding="utf-8")
     (honest / "P002.lean").write_text(answer % ("P002", "MOCK_FAIL"), encoding="utf-8")
 
-    # Left the problem's `sorry` in place: stage 1 must refuse this before
-    # any prover is asked.
+    # Resubmitting the problem module does not export the required solution.
     cheat = tmp_path / "submissions" / "cheat"
     cheat.mkdir()
     (cheat / "P001.lean").write_text(problem % "P001", encoding="utf-8")
@@ -232,3 +233,9 @@ def test_cli_grade_strict_rejects_unverified_answers(benchmark):
 def test_removed_match_command_is_not_advertised():
     from ftp_eval.cli import build_parser
     assert "match" not in build_parser().format_help()
+
+
+def test_cli_saves_runs_by_default():
+    from ftp_eval.cli import build_parser
+    args = build_parser().parse_args(["grade", "--problems", "P", "--submissions", "S"])
+    assert args.out == "runs"

@@ -10,7 +10,7 @@ the numbers.
 from __future__ import annotations
 
 import abc
-from typing import Any, Sequence
+from typing import Any, Mapping, Sequence
 
 __all__ = ["ArtifactWriter"]
 
@@ -23,7 +23,13 @@ class ArtifactWriter(abc.ABC):
     """
 
     @abc.abstractmethod
-    def write_manifest(self, **fields: Any) -> None:
+    def write_manifest(
+        self, *, problems: Mapping[str, str], participants: Sequence[str],
+        backend: str | None, judge: str | None = None,
+        problem_metadata: Mapping[str, Any] | None = None, benchmark: Any = None,
+        observed_toolchain: Mapping[str, Any] | None = None,
+        toolchain_warnings: Sequence[str] = (), extra: Mapping[str, Any] | None = None,
+    ) -> None:
         """What was graded, with what, when.
 
         Must record at minimum: the problem set with content hashes, the
@@ -38,16 +44,8 @@ class ArtifactWriter(abc.ABC):
         """Every answer's conclusion at every stage it reached."""
 
     @abc.abstractmethod
-    def write_report(self, statistics: Any, **fields: Any) -> None:
-        """The aggregate, over correct and incorrect answers alike."""
-
-    def write_probe(  # noqa: B027 - an optional hook, not an abstract method
-        self, answer: Any, source: str, log: str = ""
+    def write_report(
+        self, statistics: Any, *, leaderboard: Sequence[Mapping[str, Any]],
+        graded: Sequence[Any],
     ) -> None:
-        """The exact text a prover was given, and what it said back.
-
-        Concrete and empty rather than abstract: a writer that records no
-        probes is still a valid writer, and making every implementation
-        stub this out would be noise. Strongly recommended all the same --
-        a verdict nobody can reproduce is a verdict nobody can appeal.
-        """
+        """The aggregate, over correct and incorrect answers alike."""

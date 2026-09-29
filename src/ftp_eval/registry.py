@@ -60,14 +60,9 @@ def load_entry_points() -> None:
     if _entry_points_loaded:
         return
     _entry_points_loaded = True
-    try:
-        from importlib.metadata import entry_points
-    except ImportError:  # pragma: no cover - Python < 3.8
-        return
-    try:
-        eps = entry_points(group="ftp_eval.backends")
-    except TypeError:  # pragma: no cover - older selectable API
-        eps = entry_points().get("ftp_eval.backends", ())  # type: ignore[attr-defined]
+    from importlib.metadata import entry_points
+
+    eps = entry_points(group="ftp_eval.backends")
     for ep in eps:
         if ep.name in _REGISTRY:
             continue

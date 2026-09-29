@@ -18,7 +18,7 @@ as the comparison between the two.
   that ties all of it together.
 
 Measured cost of the whole layer: ~0.18 ms per attempt. See
-``tests/measure_speed.py`` and ``tests/test_performance.py``.
+``scripts/measure_speed.py`` and ``tests/test_performance.py``.
 """
 
 from __future__ import annotations

@@ -1,13 +1,20 @@
 # formal-theorem-proving-eval-api
 
-Evaluate theorem-proving submissions against a **frozen Lean proposition**.
+A Lean 4 evaluation framework for theorem-proving models, with **frozen targets**,
+proof verification, and reproducible run records.
 The benchmark compiles `Problem.Target` first. An answer imports that module,
 develops any helpers it needs, and exports `Submission.solution : Problem.Target`.
 A generated check module checks the type and audits the proof's axiom closure.
 
 Only a successful kernel check **and** a clean axiom audit count as solved.
 Missing backends, unsupported module builds, and missing axiom listings never
-count as proof. Textual theorem matching and the `match` command have been removed.
+count as proof.
+
+To guard against reward hacking, grading freezes the target before loading an
+answer, restricts imports and environment changes, and builds each answer in
+isolation. The axiom audit checks the proof's transitive dependencies and rejects
+`sorryAx` and axioms outside the benchmark's allowed list. These safeguards and
+their limits are described in [soundness policy](docs/soundness.md).
 
 ## Install
 
@@ -32,7 +39,7 @@ end Problem
 import Bench.P001
 namespace Submission
 def value : Nat := 1
-lemma helper : value = 1 := rfl
+theorem helper : value = 1 := rfl
 theorem solution : Problem.Target value := helper
 end Submission
 ```
@@ -91,7 +98,8 @@ provenance, faithfulness to prose (with `--judge`), and health (with `--backend`
 This is a separate API from grading frozen Target modules. Health probes expect
 the original theorem statement, rather than a `def Target` wrapper.
 
-Judges: `mock` for tests and `claude` for API judging. A paid judge requires
+Judges: `mock` for tests and `claude` for API judging. Install the optional SDK with
+`pip install -e ".[judge]"`. A paid judge requires
 `--yes`; `--judge-option KEY=VALUE` configures it. The judge does not prove answers.
 
 ## Backends and diagnostics
@@ -115,14 +123,25 @@ recorded by the analysis layer. Metrics do not establish correctness; see
 
 ```bash
 pytest
-ruff check src tests
-python tests/measure_speed.py --check
+ruff check src tests scripts
+mypy
+python scripts/measure_speed.py --check
 ```
 
 Tests use synthetic module-build responses to exercise the grading and persistence
 contracts without Lean. A passing Python suite does not establish that a real
 Lean toolchain compiled the examples. The performance script measures Python
 analysis and grading overhead; it does not benchmark real Lean compilation.
+
+## Repository map
+
+- `src/ftp_eval/`: library and CLI; [architecture](ARCHITECTURE.md).
+- `benchmarks/`: problem modules and grouped submission fixtures.
+- `examples/`: the standalone three-module interface example.
+- `tests/`: regression tests.
+- `scripts/`: development utilities.
+- `docs/`: backend, soundness, metrics and run references.
+- `runs/`: generated local results, excluded from Git.
 
 ## License
 

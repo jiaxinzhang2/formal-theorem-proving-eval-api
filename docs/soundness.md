@@ -1,6 +1,22 @@
+# Soundness policy
+
 Frozen benchmark grading checks a compiled `Problem.Target` through `Submission.solution` and audits its axiom closure. It does not compare theorem text. The statement-screening sections below describe the independent low-level verifier API. See [architecture](../ARCHITECTURE.md).
 
-# Soundness screening
+## Frozen benchmark grading
+
+The problem module is trusted and compiled first. The generated check ascribes
+`Submission.solution` to `Problem.Target`, then audits the dependency closure.
+The default axiom allowlist is `propext`, `Classical.choice` and `Quot.sound`.
+A missing listing is an audit failure. Interface screening enforces imports and
+namespace policy and rejects obvious placeholders, fresh axioms and kernel escapes.
+See [benchmark policy](../benchmarks/README.md) and [run records](runs.md).
+
+The source screen is conservative and syntactic; it is not a complete Lean
+parser. Verification trusts the selected Lean toolchain, allowed imports and
+benchmark environment. Fresh processes and separate build directories provide
+evaluation isolation, rather than an OS sandbox for arbitrary metaprograms.
+
+## Lower-level verifier screening
 
 A formal prover is only a trustworthy reward signal if the thing that got
 proved is the thing that was asked. Several ways of failing that test end

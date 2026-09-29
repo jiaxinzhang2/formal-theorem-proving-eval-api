@@ -1,13 +1,13 @@
-Benchmark grading now requires the frozen interface, a kernel verdict and a clean axiom audit; see [run lifecycle](runs.md). Unverified answers never count as solved.
-
 # Metrics reference
+
+Benchmark grading requires the frozen interface, a kernel verdict and a clean axiom audit; see [run lifecycle](runs.md). Unverified answers never count as solved.
 
 Everything the harness records, by category. Recorded for **every**
 answer, not only the correct ones: how an answer fails is as informative as
 how it succeeds, and most of the categories below are only interesting as
 the comparison between the two.
 
-The unit is one answer to one problem. `results/<run-id>/answers/<who>/<problem>.json`
+The unit is one answer to one problem. `runs/<run-id>/answers/<who>/<problem>.json`
 carries the per-answer fields, `4-report/*.tsv` the aggregates, and
 `summary.json` the headline numbers.
 
@@ -34,23 +34,21 @@ The headline numbers.
 `reasons` | `4-report/reasons.tsv` | Every distinct refusal reason, counted |
 
 `NOT_RUN` is never folded into passed or failed: a stage that could not run
-is not evidence either way. A prover error is not the participant's fault
-and does not count against them.
+is not evidence either way. Backend errors remain explicit `not_run` outcomes. They never count as solved;
+use the stage records to distinguish an infrastructure failure from a wrong proof.
 
 ## 2. Soundness / reward hacking
 
-The category that decides whether category 1 means anything.
+Frozen benchmark verdicts record static faults in `interface.faults` and the
+dependency audit in `axioms.ok` / `axioms.violations`. The kernel result is under
+`build`, including diagnostics, axiom names and raw output. Aggregate reports
+count refusal stages and specific attack patterns in `refused_at` and
+`hack_patterns`.
 
-| metric | meaning |
-|---|---|
-`soundness.violations` | Per attempt, each tagged `[class:trick] message` |
-`hack_classes` | Rolled up by class: `placeholder`, `new_axiom`, `kernel_bypass`, `resource_uncap`, `definition_shadowing`, `statement_tampering`, `elaboration_trick`, `homoglyph` |
-`hack_patterns` | Rolled up by the **specific trick**: `lean.sorry`, `lean.axiom`, `kernel.sorry_ax`, `lean.hash_exit`, … This is the actionable cut — it names what to forbid next |
-`integrity_ok` | False if anything errored or was rejected. If false, the headline number needs a caveat |
-
-See [soundness.md](soundness.md) for the full check list. The short
-version: **passing the kernel is not the bar.** `sorry` compiles with a
-warning; `axiom cheat : <goal>` compiles with no complaint at all.
+The lower-level `Verifier.verify` API instead returns `soundness.ok` and
+`soundness.violations`; these are different result shapes. See
+[soundness policy](soundness.md). A kernel exit code alone is insufficient:
+`sorry` and declared axioms can typecheck.
 
 ## 3. The problem set itself
 
@@ -298,7 +296,7 @@ exercise as `brute_force_decide` climbs.
 ## Cost of measuring
 
 Measured, not estimated, and enforced. Reproduce with
-`python tests/measure_speed.py`; CI runs it with `--check`.
+`python scripts/measure_speed.py`; CI runs it with `--check`.
 
 Windows AMD64, CPython 3.12, best-of-N:
 

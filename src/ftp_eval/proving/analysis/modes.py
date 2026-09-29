@@ -3,7 +3,7 @@
 Both directions are classified, because both carry information a pass rate
 throws away.
 
-**Failures.** :class:`~ftp_eval.types.ErrorKind` is deliberately coarse so
+**Failures.** :class:`~ftp_eval.backends.types.ErrorKind` is deliberately coarse so
 it can mean the same thing across provers, and that coarseness hides the
 distinctions that tell you what to do next. See :class:`FailureMode`.
 
@@ -19,7 +19,7 @@ a benchmark quietly turning into a computation exercise: the share of
 
 Fine-grained failure-mode classification for failed proofs.
 
-:class:`~ftp_eval.types.ErrorKind` is deliberately coarse so it can mean
+:class:`~ftp_eval.backends.types.ErrorKind` is deliberately coarse so it can mean
 the same thing across provers. That coarseness hides the distinctions that
 actually tell you what to do next:
 
@@ -639,11 +639,12 @@ class SuccessModeStats:
 
     @property
     def substantive(self) -> int:
-        return sum(
-            count
-            for mode, count in self.modes.items()
-            if _safe_success_mode(mode) and _safe_success_mode(mode).is_substantive  # type: ignore[union-attr]
-        )
+        total = 0
+        for name, count in self.modes.items():
+            mode = _safe_success_mode(name)
+            if mode is not None and mode.is_substantive:
+                total += count
+        return total
 
     @property
     def substantive_fraction(self) -> float:

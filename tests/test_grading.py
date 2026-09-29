@@ -7,7 +7,7 @@ from ftp_eval import ContestPolicy, ModuleBuild, Status, create
 from ftp_eval.backends.types import Diagnostic, Severity
 from ftp_eval.proving.grading import ProblemSet, Submission, grade_contest, load_problem_set, load_submissions
 from ftp_eval.proving.grading.metadata import BenchmarkManifest, parse_problem_metadata, reconcile_toolchain
-from ftp_eval.proving.grading.stages import Stage, StageStatus
+from ftp_eval.proving.grading.results import Stage, StageStatus
 from ftp_eval.proving.interface import InterfaceFault
 from ftp_eval.spec import StageStatus as ContractStatus
 
@@ -118,6 +118,7 @@ def test_loading_preserves_metadata_and_stray_files(benchmark):
     problems, submissions = load(benchmark)
     assert problems.ids() == ("P001", "P002")
     assert problems.metadata["P001"].mathdb_id == "392323"
+    assert problems.metadata["P001"].theorem_name == "Problem.Target"
     assert problems.manifest.lean == "v4.15.0"
     assert submissions[1].unrecognized == ("P999.lean",)
 
@@ -196,6 +197,20 @@ def test_manifest_records_provenance_policy_and_observed_toolchain(benchmark, tm
 def test_unknown_policy_knobs_are_rejected():
     with pytest.raises(ValueError, match="unknown policy"):
         grade_contest(ProblemSet({}, manifest=BenchmarkManifest(raw={"policy": {"typo": True}})), [])
+
+
+def test_run_metadata_is_saved(tmp_path):
+    result = one(output_dir=tmp_path, run_metadata={"model": "model-v2", "seed": 42})
+    manifest = json.loads((result.run_directory / "run.json").read_text())
+    assert manifest["run_metadata"] == {"model": "model-v2", "seed": 42}
+    assert (result.run_directory / "inputs/problems/P001.lean").read_text() == PROBLEM
+    assert (result.run_directory / "inputs/submissions/alice/P001.lean").read_text() == GOOD
+
+
+@pytest.mark.parametrize("run_id", ["..", "../escape", "a/b", "a\\b", "a."])
+def test_run_id_stays_inside_output_root(tmp_path, run_id):
+    with pytest.raises(ValueError, match="invalid run"):
+        one(output_dir=tmp_path, run_id=run_id)
 
 def test_metadata_and_toolchain_discrepancies_remain_visible():
     metadata = parse_problem_metadata("/-!\n- mathdb_id: 1\n- reviewer_initials: ab\n-/\ntheorem t : True := by sorry")

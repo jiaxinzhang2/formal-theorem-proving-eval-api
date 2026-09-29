@@ -66,7 +66,7 @@ def _open_judge(args: argparse.Namespace) -> Any:
 
 
 def cmd_grade(args: argparse.Namespace) -> int:
-    """Grade a benchmark: N problems x many participants, three stages."""
+    """Grade a benchmark: interface, kernel and axiom checks, then reporting."""
     problem_set = load_problem_set(args.problems)
     if not len(problem_set):
         print("no .lean problem files in %s" % args.problems, file=sys.stderr)
@@ -406,7 +406,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="prover for frozen-module builds; omitted means no kernel verdict and zero solved",
     )
     p_grade.add_argument(
-        "--out", help="write the results directory under here (one subdirectory per run)"
+        "--out", default="runs", help="results root (default: runs; one subdirectory per run)"
     )
     p_grade.add_argument("--run-id", help="name the run directory (default: a UTC timestamp)")
     p_grade.add_argument("--timeout", type=float, default=300.0, help="seconds per compile")

@@ -2,8 +2,9 @@
 
 ```bash
 pytest
-ruff check src tests
-python tests/measure_speed.py --check
+ruff check src tests scripts
+mypy
+python scripts/measure_speed.py --check
 ```
 
 The Python suite does not require Lean. Simulated module-build responses exercise

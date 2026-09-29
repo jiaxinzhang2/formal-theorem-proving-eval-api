@@ -10,9 +10,9 @@ Committed so the speed claims in the docs are checkable. Run it before and
 after touching :mod:`ftp_eval.proving.analysis.structure`, :mod:`ftp_eval.backends.soundness`,
 :mod:`ftp_eval.proving.analysis.tactics` or :mod:`ftp_eval.proving.analysis.modes`.
 
-    python tests/measure_speed.py            # human-readable table
-    python tests/measure_speed.py --json     # machine-readable
-    python tests/measure_speed.py --check    # enforce budgets, exit 1 on breach
+    python scripts/measure_speed.py            # human-readable table
+    python scripts/measure_speed.py --json     # machine-readable
+    python scripts/measure_speed.py --check    # enforce budgets, exit 1 on breach
 
 ``--check`` is what CI runs. Its budgets are deliberately loose -- roughly
 20-50x over the measured figures -- because the job of the absolute bounds

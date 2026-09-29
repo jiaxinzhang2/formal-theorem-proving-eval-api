@@ -2,10 +2,10 @@
 
 A backend answers one question — *does this proof close this goal?* — in
 the shared vocabulary of `ftp_eval.backends.types`. Everything else (source
-assembly, soundness screening, timing, timeouts, error wrapping,
-caching, concurrency) is handled above you.
+assembly, soundness screening, timing and error wrapping) is handled by the
+base verifier. Each adapter handles its own timeout, isolation and caching.
 
-Read `src/ftp_eval/proving/backends/mock.py` first. It is the reference
+Read `src/ftp_eval/backends/mock.py` first. It is the reference
 implementation and its actual logic is about thirty lines.
 
 ## The minimum
@@ -101,10 +101,10 @@ beats any regex. See [soundness.md](soundness.md).
 ## Thread safety
 
 A caller parallelizing with threads must only use `thread_safe = True` when
-that concurrent `_verify` calls not share mutable state. Separate
+concurrent `_verify` calls do not share mutable state. Separate
 subprocesses with separate temp files qualify; a single long-lived REPL
 session does not. Use `thread_safe = False` to signal that callers must use
-concurrency 1 and says so. Being slow beats corrupting a run.
+serial execution. Separate answer directories are required for module builds.
 
 If you write temp files, write them where the prover can resolve imports
 — for Lean that means inside the project directory, not the system temp
@@ -117,7 +117,7 @@ For a backend inside this package, add it to `_BUILTINS` in
 the others. For one in your own package, publish an entry point:
 
 ```toml
-[project.entry-points."ftp_eval.proving.backends"]
+[project.entry-points."ftp_eval.backends"]
 myprover = "my_package.backend:MyProver"
 ```
 

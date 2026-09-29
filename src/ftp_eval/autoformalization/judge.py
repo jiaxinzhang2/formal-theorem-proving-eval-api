@@ -8,7 +8,7 @@ and the only scalable way to make it is to ask a model.
 Which makes the judge the weakest link in the pipeline, so the design
 here is about not trusting it more than it deserves:
 
-* **Abstention is a real answer.** :class:`~ftp_eval.types.JudgeLabel`
+* **Abstention is a real answer.** :class:`~ftp_eval.autoformalization.types.JudgeLabel`
   has ``UNSURE``, and a judge that abstains is routed to a human rather
   than averaged into a score.
 * **Rejections get re-checked.** A single low-effort pass that says

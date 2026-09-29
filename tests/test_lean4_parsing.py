@@ -62,6 +62,13 @@ def test_noise_without_positions_is_ignored():
     assert parse_lean_log("Building Mathlib\nwarning: something\n") == []
 
 
+def test_windows_path_spaces_and_tagged_errors_are_parsed():
+    message = r"C:\Users\a\My Project\Check.lean:6:43: error(lean.unknownIdentifier): Unknown identifier `helper`"
+    diagnostic = parse_lean_log(message)[0]
+    assert (diagnostic.line, diagnostic.column) == (6, 43)
+    assert diagnostic.kind is ErrorKind.UNKNOWN_IDENTIFIER
+
+
 @pytest.mark.parametrize(
     "message,expected",
     [
