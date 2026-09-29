@@ -26,7 +26,8 @@ import os
 from typing import Any, Mapping
 
 from ..judge import Judge, JudgeError, JudgeInfo, build_judge_prompt
-from ...types import JudgeLabel, JudgeUsage, JudgeVerdict, StatementTask
+from ...shared.types import StatementTask
+from ..types import JudgeLabel, JudgeUsage, JudgeVerdict
 
 __all__ = ["ClaudeJudge", "PRICES_USD_PER_MTOK", "PRICES_AS_OF"]
 

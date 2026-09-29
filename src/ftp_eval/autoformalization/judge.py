@@ -29,7 +29,8 @@ import hashlib
 from collections import Counter
 from typing import Any, Mapping, Sequence
 
-from ..types import JudgeLabel, JudgeUsage, JudgeVerdict, StatementTask
+from ..shared.types import StatementTask
+from .types import JudgeLabel, JudgeUsage, JudgeVerdict
 
 __all__ = [
     "Judge",

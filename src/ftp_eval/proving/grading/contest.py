@@ -73,6 +73,20 @@ class ProblemSet:
     def ids(self) -> tuple[str, ...]:
         return tuple(sorted(self.problems))
 
+    def source_for(self, problem_id: str) -> str:
+        """The problem file's Lean source."""
+        return self.problems[problem_id]
+
+    def prose_for(self, problem_id: str) -> str:
+        """The problem's natural-language statement, or "" if it records none.
+
+        Empty is a normal answer, not an error: grading never needs prose.
+        Only ``ftp-eval audit`` does, and it reports which problems it could
+        not judge rather than failing on them.
+        """
+        entry = self.metadata.get(problem_id)
+        return entry.prose if entry else ""
+
     def without_provenance(self) -> tuple[str, ...]:
         """Problems recording neither a MathDB id nor a source.
 

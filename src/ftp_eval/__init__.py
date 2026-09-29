@@ -1,64 +1,57 @@
-"""ftp_eval -- a unified API for evaluating formal theorem-proving models.
+"""ftp_eval -- evaluating formal theorem proving, from Lean files.
 
-A formal-proving dataset has three artifacts, so there are two links to
-check, and the package is laid out along them::
+One input format: **Lean files**. A problem is one ``.lean`` file with one
+theorem; an answer is another. A benchmark is a folder of problems. There is
+no second input shape to learn.
 
-    natural language  ──①──▶  formal statement  ──②──▶  formal proof
-                      faithful?                 valid?
+Two APIs, because they answer different questions::
 
-    formalizing/   ① is the formalization faithful to the problem?
-      checker.py     structural probes + an LLM judge, kept distinct
-      judge.py       the judge interface, a mock, consensus voting
-      judges/        provider-backed judges
+    natural language  ──▶  formal statement  ──▶  formal proof
+                    autoformalization/       proving/
+                    is it faithful?          does it prove it?
 
-    proving/       ② does the proof close the goal?
-      verifier.py    the interface every backend implements
-      runner.py      batch execution: streaming, resume, caching
-      backends/      mock, lean4, axle
+    proving/            does this answer prove this theorem?
+      lean_file.py        parsing Lean files into declarations
+      matching.py         stage 1: statement identity
+      verifier.py         stage 2: the backend interface
+      backends/           mock, lean4, axle
+      analysis/           proof-side metrics: tactics, structure, modes
+      grading/            the contest pipeline: N problems, many participants
 
-    analysis/      what happened, for passes and failures alike
-      tactics.py     which tactics, in what order
-      structure.py   proof shape, statement complexity, correlations
-      modes.py       failure modes with attribution; success modes
-      scoring.py     unbiased pass@k and the Summary
+    autoformalization/  is this formalization faithful to the problem?
+      checker.py          prover probes + an LLM judge
+      complexity.py       statement-side metrics
+      judge.py, judges/   the judge interface and its providers
 
-    pipeline.py    both links together, with a combined verdict
+Shared by both, which is why they sit at the top level::
 
-Shared by all three layers, which is why they sit at the top level:
-
-    types.py       the vocabulary every layer speaks
+    spec/          the contracts -- read this first, it is pure interface
+    types.py       the vocabulary both APIs speak
     soundness.py   reward-hacking detection
     comments.py    what counts as a comment, per language
-    dataset.py     JSONL I/O and the three-file layout
+    stats.py       distributions and correlation
     registry.py    backend and judge lookup by name
 
-Everything in the public API is importable straight from ``ftp_eval``; the
-module paths above matter only when extending the package.
+Everything public is importable straight from ``ftp_eval``; the module
+paths matter only when extending the package. Full map in
+``ARCHITECTURE.md``.
 
-    from ftp_eval import ProofTask, ProofAttempt, create, EvalRunner
+    from ftp_eval import match_submission
 
-    verifier = create("lean4", project_dir="~/mathlib-project")
-    task = ProofTask(task_id="t1", header="import Mathlib",
-                     formal_statement="theorem t1 (n : Nat) : n + 0 = n := by")
-    attempt = ProofAttempt(task_id="t1", proof=" simp")
-    print(verifier.verify(task, attempt).status)
+    report = match_submission(open("theorem.lean").read(),
+                              open("answer.lean").read())
+    print(report.verdict)
 """
 
 from __future__ import annotations
 
 __version__ = "0.1.0"
 
-from .dataset import (
-    ResultWriter,
-    load_attempts,
-    load_results,
-    load_tasks,
-    load_triplets,
-    read_jsonl,
-    write_jsonl,
-)
+from .autoformalization.checker import StatementChecker
+from .autoformalization.complexity import StatementComplexity, analyze_statement
 from .autoformalization.judge import ConsensusJudge, Judge, JudgeError, MockJudge
-from .proving.analysis.scoring import Summary, estimate_pass_at_k, pass_at_k, summarize
+from .shared.comments import strip_comments
+from .shared.io import read_jsonl, write_jsonl
 from .proving.analysis.modes import (
     Attribution,
     FailureMode,
@@ -67,42 +60,26 @@ from .proving.analysis.modes import (
     classify_success,
     looks_truncated,
 )
-from .end_to_end import EndToEndResult, EndToEndRunner, EndToEndStatus
-from .autoformalization.complexity import StatementComplexity, analyze_statement
 from .proving.analysis.structure import ProofStructure, analyze_proof
-from .stats import Correlation, correlate_with_success
-from .registry import (
-    available,
-    available_judges,
-    create,
-    create_judge,
-    register,
-    register_judge,
-)
-from .proving.runner import EvalRunner, ProgressEvent, ResultCache, RunConfig
-from .soundness import HackClass, audit_axioms, screen_source
-from .autoformalization.checker import StatementChecker
 from .proving.analysis.tactics import extract_tactics
-from .types import (
-    Assembly,
-    BackendInfo,
-    Check,
-    CheckKind,
-    Diagnostic,
-    ErrorKind,
-    JudgeLabel,
-    JudgeUsage,
-    JudgeVerdict,
-    ProbeKind,
-    ProofAttempt,
-    ProofTask,
-    Severity,
-    SoundnessReport,
-    StatementStatus,
-    StatementTask,
-    StatementVerdict,
-    Status,
-    VerificationResult,
+from .proving.grading import (
+    ContestResult,
+    GradedAnswer,
+    ProblemSet,
+    Stage,
+    StageStatus,
+    Submission,
+    grade_contest,
+    load_problem_set,
+    load_submissions,
+)
+from .proving.lean_file import LeanDeclaration, LeanFile, parse_lean_file
+from .proving.matching import (
+    MatchReport,
+    MatchStatus,
+    MismatchKind,
+    SubmissionMatcher,
+    match_submission,
 )
 from .proving.verifier import (
     BackendUnavailable,
@@ -112,10 +89,97 @@ from .proving.verifier import (
     assemble_source,
     screen_soundness,
 )
+from .registry import (
+    available,
+    available_judges,
+    create,
+    create_judge,
+    register,
+    register_judge,
+)
+from .shared.soundness import HackClass, audit_axioms, screen_source
+from .shared.stats import Correlation, correlate_with_success, distribution, point_biserial
+from .shared.types import (
+    Assembly,
+    BackendInfo,
+    Diagnostic,
+    ErrorKind,
+    ProbeKind,
+    ProofAttempt,
+    ProofTask,
+    Severity,
+    SoundnessReport,
+    StatementTask,
+    Status,
+    VerificationResult,
+)
+
+from .autoformalization.types import Check, CheckKind, JudgeLabel, JudgeUsage, JudgeVerdict, StatementStatus, StatementVerdict
 
 __all__ = [
     "__version__",
-    # types
+    # -- proving: does this answer prove this theorem? ------------------
+    "match_submission",
+    "MatchReport",
+    "MatchStatus",
+    "MismatchKind",
+    "SubmissionMatcher",
+    "parse_lean_file",
+    "LeanFile",
+    "LeanDeclaration",
+    "Verifier",
+    "RawVerdict",
+    "VerifierError",
+    "BackendUnavailable",
+    "assemble_source",
+    "screen_soundness",
+    # -- grading a benchmark -------------------------------------------
+    "grade_contest",
+    "load_problem_set",
+    "load_submissions",
+    "ProblemSet",
+    "Submission",
+    "ContestResult",
+    "GradedAnswer",
+    "Stage",
+    "StageStatus",
+    # -- autoformalization: is this formalization faithful? ------------
+    "StatementChecker",
+    "StatementTask",
+    "StatementVerdict",
+    "StatementStatus",
+    "StatementComplexity",
+    "analyze_statement",
+    "Check",
+    "CheckKind",
+    "ProbeKind",
+    "Judge",
+    "JudgeError",
+    "MockJudge",
+    "ConsensusJudge",
+    "JudgeLabel",
+    "JudgeVerdict",
+    "JudgeUsage",
+    # -- reward-hacking detection --------------------------------------
+    "HackClass",
+    "screen_source",
+    "audit_axioms",
+    "strip_comments",
+    # -- analysis ------------------------------------------------------
+    "extract_tactics",
+    "analyze_proof",
+    "ProofStructure",
+    "FailureMode",
+    "SuccessMode",
+    "Attribution",
+    "classify_failure",
+    "classify_success",
+    "looks_truncated",
+    "Correlation",
+    "correlate_with_success",
+    "distribution",
+    "point_biserial",
+    # -- shared --------------------------------------------------------
     "Assembly",
     "BackendInfo",
     "Diagnostic",
@@ -126,75 +190,12 @@ __all__ = [
     "SoundnessReport",
     "Status",
     "VerificationResult",
-    # interface
-    "Verifier",
-    "RawVerdict",
-    "VerifierError",
-    "BackendUnavailable",
-    "assemble_source",
-    "screen_soundness",
-    # registry
     "create",
     "register",
     "available",
-    # running
-    "EvalRunner",
-    "RunConfig",
-    "ProgressEvent",
-    "ResultCache",
-    # io
-    "load_tasks",
-    "load_attempts",
-    "load_results",
-    "read_jsonl",
-    "write_jsonl",
-    "ResultWriter",
-    # scoring
-    "summarize",
-    "Summary",
-    "pass_at_k",
-    "estimate_pass_at_k",
-    # reward-hacking detection
-    "HackClass",
-    "screen_source",
-    "audit_axioms",
-    # analysis
-    "extract_tactics",
-    "analyze_proof",
-    "analyze_statement",
-    "ProofStructure",
-    "StatementComplexity",
-    "Correlation",
-    "correlate_with_success",
-    # outcome classification, for passes and failures alike
-    "FailureMode",
-    "SuccessMode",
-    "Attribution",
-    "classify_failure",
-    "classify_success",
-    "looks_truncated",
-    # statement checking
-    "StatementTask",
-    "StatementChecker",
-    "StatementVerdict",
-    "StatementStatus",
-    "Check",
-    "CheckKind",
-    "ProbeKind",
-    "load_triplets",
-    # judges
-    "Judge",
-    "JudgeError",
-    "MockJudge",
-    "ConsensusJudge",
-    "JudgeLabel",
-    "JudgeVerdict",
-    "JudgeUsage",
     "create_judge",
     "register_judge",
     "available_judges",
-    # end-to-end
-    "EndToEndRunner",
-    "EndToEndResult",
-    "EndToEndStatus",
+    "read_jsonl",
+    "write_jsonl",
 ]

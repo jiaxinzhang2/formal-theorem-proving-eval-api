@@ -23,17 +23,9 @@ import time
 from typing import Any, Sequence
 
 from .judge import Judge, JudgeError
-from ..soundness import screen_source
-from ..types import (
-    Check,
-    CheckKind,
-    JudgeLabel,
-    ProbeKind,
-    StatementStatus,
-    StatementTask,
-    StatementVerdict,
-    Status,
-)
+from ..shared.soundness import screen_source
+from ..shared.types import ProbeKind, StatementTask, Status
+from .types import Check, CheckKind, JudgeLabel, StatementStatus, StatementVerdict
 from ..proving.verifier import Verifier
 
 __all__ = ["StatementChecker"]

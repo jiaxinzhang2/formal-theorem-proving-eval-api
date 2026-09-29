@@ -17,7 +17,7 @@ from ftp_eval import (
     create,
     screen_soundness,
 )
-from ftp_eval.comments import strip_comments
+from ftp_eval.shared.comments import strip_comments
 from ftp_eval.proving.verifier import assemble_source
 
 

@@ -1,4 +1,4 @@
-"""CLI behaviour, dataset I/O, registry, and the HTTP adapter's mapping."""
+"""CLI behaviour, JSONL output, registry, and the HTTP adapter's mapping."""
 
 from __future__ import annotations
 
@@ -6,72 +6,50 @@ import json
 
 import pytest
 
-from ftp_eval import ProofAttempt, ProofTask, Status, available, create, load_tasks, write_jsonl
+from ftp_eval import ProofAttempt, ProofTask, Status, available, create, write_jsonl
 from ftp_eval.proving.backends.axle import AxleVerifier
-from ftp_eval.cli import EXIT_OK, EXIT_UNSOUND, main
+from ftp_eval.cli import EXIT_OK, EXIT_UNSOUND, EXIT_USAGE, main
 from ftp_eval.proving.verifier import VerifierError
 
 
 @pytest.fixture
-def fixture_files(tmp_path):
-    tasks = [
-        ProofTask(task_id="t1", header="import Mathlib", formal_statement="theorem t1 : True := by"),
-        ProofTask(task_id="t2", header="import Mathlib", formal_statement="theorem t2 : True := by"),
-    ]
-    attempts = [
-        ProofAttempt(task_id="t1", proof=" MOCK_PASS", model="demo"),
-        ProofAttempt(task_id="t2", proof=" MOCK_FAIL", model="demo"),
-    ]
-    tp, ap = tmp_path / "tasks.jsonl", tmp_path / "attempts.jsonl"
-    write_jsonl(tp, tasks)
-    write_jsonl(ap, attempts)
-    return tp, ap, tmp_path
+def benchmark(tmp_path):
+    """A two-problem benchmark with one honest participant and one cheat.
+
+    The shape a real contest has: a folder of problems, a folder per
+    participant. MOCK_PASS / MOCK_FAIL steer the mock prover.
+    """
+    problem = """import Mathlib
+
+theorem %s : True := by
+  sorry
+"""
+    answer = """import Mathlib
+
+theorem %s : True := by
+  %s
+"""
+
+    problems = tmp_path / "problems"
+    problems.mkdir()
+    for pid in ("P001", "P002"):
+        (problems / (pid + ".lean")).write_text(problem % pid, encoding="utf-8")
+
+    honest = tmp_path / "submissions" / "honest"
+    honest.mkdir(parents=True)
+    (honest / "P001.lean").write_text(answer % ("P001", "MOCK_PASS"), encoding="utf-8")
+    (honest / "P002.lean").write_text(answer % ("P002", "MOCK_FAIL"), encoding="utf-8")
+
+    # Left the problem's `sorry` in place: stage 1 must refuse this before
+    # any prover is asked.
+    cheat = tmp_path / "submissions" / "cheat"
+    cheat.mkdir()
+    (cheat / "P001.lean").write_text(problem % "P001", encoding="utf-8")
+
+    return problems, tmp_path / "submissions", tmp_path
 
 
 # -- I/O --------------------------------------------------------------
-
-
-def test_round_trip_through_jsonl(tmp_path):
-    task = ProofTask(
-        task_id="t1",
-        formal_statement="theorem t1 : True := by",
-        split="valid",
-        metadata={"source": "minif2f"},
-    )
-    path = tmp_path / "tasks.jsonl"
-    write_jsonl(path, [task])
-    loaded = load_tasks(path)[0]
-    assert loaded.task_id == task.task_id
-    assert loaded.split == "valid"
-    assert loaded.metadata["source"] == "minif2f"
-
-
-def test_a_plain_json_array_is_accepted(tmp_path):
-    path = tmp_path / "tasks.json"
-    path.write_text(
-        json.dumps([{"task_id": "t1", "formal_statement": "theorem t1 : True := by"}]),
-        encoding="utf-8",
-    )
-    assert len(load_tasks(path)) == 1
-
-
-def test_unknown_columns_are_preserved_in_metadata(tmp_path):
-    path = tmp_path / "tasks.jsonl"
-    path.write_text(
-        json.dumps(
-            {"task_id": "t1", "formal_statement": "theorem t1 : True := by", "difficulty": "hard"}
-        )
-        + "\n",
-        encoding="utf-8",
-    )
-    assert load_tasks(path)[0].metadata["difficulty"] == "hard"
-
-
-def test_a_bad_line_names_the_file_and_line_number(tmp_path):
-    path = tmp_path / "tasks.jsonl"
-    path.write_text('{"task_id": "ok", "formal_statement": "x := by"}\nnot json\n', encoding="utf-8")
-    with pytest.raises(ValueError, match=r":2: invalid JSON"):
-        load_tasks(path)
 
 
 def test_missing_task_id_is_rejected_loudly():
@@ -142,52 +120,52 @@ def test_cli_doctor_reports_an_unavailable_backend():
     assert main(["doctor", "-b", "axle"]) != EXIT_OK
 
 
-def test_cli_verify_end_to_end(fixture_files, capsys):
-    tasks, attempts, tmp = fixture_files
-    out = tmp / "results.jsonl"
+def test_cli_grade_end_to_end(benchmark, capsys):
+    problems, submissions, tmp = benchmark
+    results = tmp / "results"
     code = main(
-        [
-            "verify", "-b", "mock",
-            "--tasks", str(tasks), "--attempts", str(attempts),
-            "--out", str(out), "--summary-out", str(tmp / "summary.json"),
-            "--k", "1", "--quiet",
-        ]
+        ["grade", "-b", "mock", "--problems", str(problems),
+         "--submissions", str(submissions), "--out", str(results), "--quiet"]
     )
     assert code == EXIT_OK
-    assert "solve rate" in capsys.readouterr().out
-    summary = json.loads((tmp / "summary.json").read_text(encoding="utf-8"))
-    assert summary["counts"]["verified"] == 1
-    assert summary["counts"]["failed"] == 1
-    assert len(out.read_text(encoding="utf-8").strip().splitlines()) == 2
+    assert "participant" in capsys.readouterr().out
+
+    # Every stage left its record behind, under the names the artifact
+    # layout promises.
+    run = next(results.iterdir())
+    assert (run / "run.json").exists()
+    assert (run / "1-match" / "all.jsonl").exists()
+    assert (run / "3-report" / "by-problem.tsv").exists()
+    assert (run / "leaderboard.tsv").exists()
 
 
-def test_cli_verify_strict_fails_on_an_unsound_pass(fixture_files, tmp_path):
-    tasks, _, tmp = fixture_files
-    cheating = tmp / "cheat.jsonl"
-    write_jsonl(cheating, [ProofAttempt(task_id="t1", proof=" MOCK_PASS -- and\n sorry")])
+def test_cli_grade_strict_fails_on_a_refused_answer(benchmark):
+    problems, submissions, _ = benchmark
     code = main(
-        ["verify", "-b", "mock", "--tasks", str(tasks), "--attempts", str(cheating),
-         "--quiet", "--strict"]
+        ["grade", "-b", "mock", "--problems", str(problems),
+         "--submissions", str(submissions), "--quiet", "--strict"]
     )
     assert code == EXIT_UNSOUND
 
 
-def test_cli_score_reads_a_results_file(fixture_files, capsys):
-    tasks, attempts, tmp = fixture_files
-    out = tmp / "results.jsonl"
-    main(["verify", "-b", "mock", "--tasks", str(tasks), "--attempts", str(attempts),
-          "--out", str(out), "--quiet"])
-    capsys.readouterr()
-    assert main(["score", str(out), "--k", "1", "--json"]) == EXIT_OK
-    assert json.loads(capsys.readouterr().out)["tasks"] == 2
+def test_cli_grade_rejects_an_empty_problem_folder(tmp_path):
+    (tmp_path / "problems").mkdir()
+    (tmp_path / "subs").mkdir()
+    code = main(
+        ["grade", "--problems", str(tmp_path / "problems"),
+         "--submissions", str(tmp_path / "subs"), "--quiet"]
+    )
+    assert code == EXIT_USAGE
 
 
-def test_cli_preview_shows_the_assembled_source(fixture_files, capsys):
-    tasks, attempts, _ = fixture_files
-    assert main(["preview", "--tasks", str(tasks), "--attempts", str(attempts)]) == EXIT_OK
+def test_cli_audit_checks_the_problem_set_itself(benchmark, capsys):
+    problems, _, _ = benchmark
+    assert main(["audit", "--problems", str(problems), "--quiet"]) == EXIT_OK
     out = capsys.readouterr().out
-    assert "import Mathlib" in out
-    assert "theorem t1 : True := by MOCK_PASS" in out
+    # Neither problem records provenance or prose, and audit reports both
+    # gaps rather than giving the set a clean bill of health.
+    assert "no MathDB id" in out
+    assert "prose:" in out
 
 
 def test_cli_backend_options_are_json_decoded(capsys):
@@ -195,9 +173,11 @@ def test_cli_backend_options_are_json_decoded(capsys):
     assert main(["doctor", "-b", "mock", "-o", "pass_rate=1.0"]) == EXIT_OK
 
 
-def test_cli_rejects_a_malformed_option():
-    with pytest.raises(SystemExit):
-        main(["doctor", "-b", "mock", "-o", "nonsense"])
+def test_cli_rejects_a_malformed_option(capsys):
+    # main() reports through its exit code rather than an exception, so a
+    # bad -o is a usage error like any other, not a traceback.
+    assert main(["doctor", "-b", "mock", "-o", "nonsense"]) == EXIT_USAGE
+    assert "nonsense" in capsys.readouterr().err
 
 
 # -- HTTP adapter -----------------------------------------------------

@@ -1,4 +1,4 @@
-"""Statement checking, judges, and the combined end-to-end verdict."""
+"""Statement checking and the judges behind it."""
 
 from __future__ import annotations
 
@@ -19,10 +19,9 @@ from ftp_eval import (
     StatementTask,
     create,
     create_judge,
-    load_triplets,
 )
 from ftp_eval.proving.backends.lean4 import Lean4Verifier, parse_lean_theorem, parse_printed_axioms
-from ftp_eval.end_to_end import EndToEndRunner, EndToEndStatus, combine
+
 from ftp_eval.autoformalization.checker import format_statement_summary
 
 
@@ -202,7 +201,7 @@ def test_judge_failure_does_not_become_a_rejection():
 
 
 def test_statement_verdict_round_trips():
-    from ftp_eval.types import StatementVerdict
+    from ftp_eval.autoformalization.types import StatementVerdict
 
     verdict = StatementChecker(None, MockJudge()).check(
         task(formal="theorem t : True JUDGE_FAITHFUL := by")
@@ -366,7 +365,7 @@ def test_claude_judge_rejects_an_unparseable_response():
 
 
 def _verdict(status: StatementStatus, *, checked: bool = True):
-    from ftp_eval.types import Check, StatementVerdict
+    from ftp_eval.shared.types import Check, StatementVerdict
 
     checks = (
         (Check(CheckKind.JUDGE_FAITHFUL, True, "ok"),)
@@ -377,163 +376,9 @@ def _verdict(status: StatementStatus, *, checked: bool = True):
 
 
 def _proof(status):
-    from ftp_eval.types import VerificationResult
+    from ftp_eval.shared.types import VerificationResult
 
     return VerificationResult(task_id="t", attempt_id="t#0", backend="mock", status=status)
-
-
-def test_valid_proof_of_a_faithful_statement_is_solved():
-    from ftp_eval.types import Status
-
-    assert combine(_verdict(StatementStatus.OK), _proof(Status.VERIFIED)) is EndToEndStatus.SOLVED
-
-
-def test_valid_proof_of_an_unfaithful_statement_gets_its_own_status():
-    # The failure a proof-only harness would have scored as a win.
-    from ftp_eval.types import Status
-
-    assert (
-        combine(_verdict(StatementStatus.SUSPICIOUS), _proof(Status.VERIFIED))
-        is EndToEndStatus.PROVED_WRONG_STATEMENT
-    )
-
-
-def test_faithful_statement_without_a_proof_is_an_honest_miss():
-    from ftp_eval.types import Status
-
-    assert combine(_verdict(StatementStatus.OK), _proof(Status.FAILED)) is EndToEndStatus.UNPROVED
-
-
-def test_malformed_statement_short_circuits():
-    from ftp_eval.types import Status
-
-    assert (
-        combine(_verdict(StatementStatus.MALFORMED), _proof(Status.VERIFIED))
-        is EndToEndStatus.BAD_STATEMENT
-    )
-
-
-def test_hacked_proof_is_reported_as_such():
-    from ftp_eval.types import Status
-
-    assert (
-        combine(_verdict(StatementStatus.OK), _proof(Status.REJECTED))
-        is EndToEndStatus.HACKED_PROOF
-    )
-
-
-def test_unassessed_faithfulness_cannot_be_called_solved():
-    from ftp_eval.types import Status
-
-    assert (
-        combine(_verdict(StatementStatus.OK, checked=False), _proof(Status.VERIFIED))
-        is EndToEndStatus.UNVERIFIABLE
-    )
-
-
-def test_trivial_formalization_with_a_valid_proof_does_not_score():
-    """The degenerate end-to-end strategy must not win.
-
-    Formalize the problem as `True`, prove it with `trivial`. Proof-only
-    checking scores this 100%.
-    """
-    backend = create("mock")
-    checker = StatementChecker(None, MockJudge())
-    runner = EndToEndRunner(backend, checker)
-    results = runner.run(
-        [task(formal="theorem t : True JUDGE_UNFAITHFUL := by")],
-        [ProofAttempt(task_id="t", proof=" trivial MOCK_PASS")],
-    )
-    assert results[0].status is EndToEndStatus.PROVED_WRONG_STATEMENT
-    assert not results[0].solved
-    assert "WRONG statement" in __import__(
-        "ftp_eval.end_to_end", fromlist=["format_end_to_end"]
-    ).format_end_to_end(results)
-
-
-# -- three-file loading ------------------------------------------------
-
-
-def test_load_triplets_joins_on_task_id(tmp_path):
-    (tmp_path / "nl.jsonl").write_text(
-        '{"task_id": "b", "informal_statement": "second"}\n'
-        '{"task_id": "a", "informal_statement": "first"}\n',
-        encoding="utf-8",
-    )
-    # Deliberately a different order: the join must be by id, not by line.
-    (tmp_path / "f.jsonl").write_text(
-        '{"task_id": "a", "formal_statement": "theorem a : True := by"}\n'
-        '{"task_id": "b", "formal_statement": "theorem b : True := by"}\n',
-        encoding="utf-8",
-    )
-    (tmp_path / "p.jsonl").write_text(
-        '{"task_id": "a", "proof": " trivial"}\n{"task_id": "b", "proof": " trivial"}\n',
-        encoding="utf-8",
-    )
-    tasks, attempts = load_triplets(
-        tmp_path / "nl.jsonl", tmp_path / "f.jsonl", tmp_path / "p.jsonl"
-    )
-    by_id = {t.task_id: t for t in tasks}
-    assert by_id["a"].informal_statement == "first"
-    assert by_id["b"].informal_statement == "second"
-    assert len(attempts) == 2
-
-
-def test_load_triplets_accepts_alternative_field_names(tmp_path):
-    (tmp_path / "nl.jsonl").write_text('{"id": "a", "problem": "prose"}\n', encoding="utf-8")
-    (tmp_path / "f.jsonl").write_text(
-        '{"id": "a", "formal": "theorem a : True := by"}\n', encoding="utf-8"
-    )
-    (tmp_path / "p.jsonl").write_text('{"id": "a", "completion": " trivial"}\n', encoding="utf-8")
-    tasks, attempts = load_triplets(
-        tmp_path / "nl.jsonl", tmp_path / "f.jsonl", tmp_path / "p.jsonl"
-    )
-    assert tasks[0].informal_statement == "prose"
-    assert attempts[0].proof == " trivial"
-
-
-def test_load_triplets_collects_multiple_samples(tmp_path):
-    (tmp_path / "nl.jsonl").write_text('{"task_id": "a", "problem": "x"}\n', encoding="utf-8")
-    (tmp_path / "f.jsonl").write_text(
-        '{"task_id": "a", "formal_statement": "theorem a : True := by"}\n', encoding="utf-8"
-    )
-    (tmp_path / "p.jsonl").write_text(
-        '{"task_id": "a", "proof": " one"}\n{"task_id": "a", "proof": " two"}\n', encoding="utf-8"
-    )
-    _, attempts = load_triplets(tmp_path / "nl.jsonl", tmp_path / "f.jsonl", tmp_path / "p.jsonl")
-    assert [a.sample_index for a in attempts] == [0, 1]
-
-
-def test_load_triplets_rejects_a_missing_formalization(tmp_path):
-    (tmp_path / "nl.jsonl").write_text(
-        '{"task_id": "a", "problem": "x"}\n{"task_id": "b", "problem": "y"}\n', encoding="utf-8"
-    )
-    (tmp_path / "f.jsonl").write_text(
-        '{"task_id": "a", "formal_statement": "theorem a : True := by"}\n', encoding="utf-8"
-    )
-    with pytest.raises(ValueError, match="no formalization"):
-        load_triplets(tmp_path / "nl.jsonl", tmp_path / "f.jsonl")
-
-
-def test_load_triplets_works_without_prose_for_given_statements(tmp_path, capsys):
-    """The statements-are-given case: audit them with no prose at all.
-
-    On a fixed task set, a vacuous or trivially-true statement is the
-    dataset's bug rather than the model's, and worth finding once over the
-    task set instead of per attempt. That must not require inventing
-    natural-language problems to sit next to it.
-    """
-    (tmp_path / "f.jsonl").write_text(
-        '{"task_id": "a", "formal_statement": "theorem a (n : Nat) : n = n := by"}\n'
-        '{"task_id": "b", "formal_statement": "theorem b : True := by"}\n',
-        encoding="utf-8",
-    )
-    tasks, attempts = load_triplets(None, tmp_path / "f.jsonl")
-    assert [t.task_id for t in tasks] == ["a", "b"]
-    assert all(t.informal_statement == "" for t in tasks)
-    assert attempts == []
-    # No orphan warning: there is no prose by design, not by mistake.
-    assert "no natural-language problem" not in capsys.readouterr().err
 
 
 def test_structural_checks_still_run_without_prose():

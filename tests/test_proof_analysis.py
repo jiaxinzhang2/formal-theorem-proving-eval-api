@@ -4,14 +4,14 @@ from __future__ import annotations
 
 import pytest
 
-from ftp_eval import Status, VerificationResult, extract_tactics, summarize
+from ftp_eval import Status, VerificationResult, extract_tactics
 from ftp_eval.proving.analysis.structure import (
     aggregate_structure,
     analyze_proof,
     sample_duplication,
 )
 from ftp_eval.proving.analysis.tactics import tactic_stats
-from ftp_eval.stats import distribution
+from ftp_eval.shared.stats import distribution
 
 PROOF = """\
 by
@@ -271,34 +271,6 @@ def test_aggregate_structure_splits_by_outcome():
 # -- wired into the summary ------------------------------------------
 
 
-def test_summary_carries_tactics_and_structure():
-    results = [
-        VerificationResult(
-            task_id="a",
-            attempt_id="a#0",
-            backend="mock",
-            status=Status.VERIFIED,
-            tactics=("simp", "omega"),
-            structure=analyze_proof("by simp\n  omega").to_dict(),
-        ),
-        VerificationResult(
-            task_id="b",
-            attempt_id="b#0",
-            backend="mock",
-            status=Status.FAILED,
-            tactics=("nlinarith",),
-            structure=analyze_proof(PROOF).to_dict(),
-        ),
-    ]
-    summary = summarize(results, ks=(1,))
-    assert summary.tactics.total["simp"] == 1
-    assert summary.structure.proofs == 2
-    text = summary.format_text(include_tactics=True)
-    assert "tactic frequency" in text
-    assert "proof structure" in text
-    assert "tactics" in summary.to_dict()
-
-
 def test_failed_attempts_are_measured_too():
     # Explicitly: metrics are recorded for failures, not only successes.
     from ftp_eval import ProofAttempt, ProofTask, create
@@ -415,7 +387,7 @@ def test_statement_complexity_travels_with_the_result():
 
 
 def test_point_biserial_detects_a_clean_relationship():
-    from ftp_eval.stats import point_biserial
+    from ftp_eval.shared.stats import point_biserial
 
     values = [1, 2, 3, 10, 11, 12]
     outcomes = [True, True, True, False, False, False]
@@ -425,7 +397,7 @@ def test_point_biserial_detects_a_clean_relationship():
 
 
 def test_point_biserial_is_none_when_undefined():
-    from ftp_eval.stats import point_biserial
+    from ftp_eval.shared.stats import point_biserial
 
     assert point_biserial([1, 2], [True, False]) is None          # too few points
     assert point_biserial([5, 5, 5], [True, False, True]) is None  # no variation
@@ -433,14 +405,14 @@ def test_point_biserial_is_none_when_undefined():
 
 
 def test_point_biserial_rejects_mismatched_lengths():
-    from ftp_eval.stats import point_biserial
+    from ftp_eval.shared.stats import point_biserial
 
     with pytest.raises(ValueError):
         point_biserial([1, 2, 3], [True, False])
 
 
 def test_correlations_are_ranked_by_magnitude():
-    from ftp_eval.stats import correlate_with_success
+    from ftp_eval.shared.stats import correlate_with_success
 
     entries = []
     for i in range(20):
@@ -457,7 +429,7 @@ def test_correlations_are_ranked_by_magnitude():
 
 
 def test_correlation_report_states_the_causation_caveat():
-    from ftp_eval.stats import correlate_with_success, format_correlations
+    from ftp_eval.shared.stats import correlate_with_success, format_correlations
 
     entries = [({"lines": 2 if i < 6 else 40}, i < 6) for i in range(12)]
     text = format_correlations(correlate_with_success(entries, fields=("lines", "cited_lemmas")))
@@ -466,7 +438,7 @@ def test_correlation_report_states_the_causation_caveat():
 
 
 def test_empty_correlations_say_so():
-    from ftp_eval.stats import format_correlations
+    from ftp_eval.shared.stats import format_correlations
 
     assert "none above" in format_correlations([])
 
@@ -484,40 +456,6 @@ def _result(task_id, status, *, model=None, sample=0, structure=None):
         sample_index=sample,
         structure=structure or {},
     )
-
-
-def test_summary_breaks_down_by_model():
-    results = [
-        _result("a", Status.VERIFIED, model="strong"),
-        _result("b", Status.VERIFIED, model="strong"),
-        _result("a", Status.FAILED, model="weak"),
-        _result("b", Status.FAILED, model="weak"),
-    ]
-    summary = summarize(results, ks=(1,))
-    assert summary.by_model["strong"]["solve_rate"] == pytest.approx(1.0)
-    assert summary.by_model["weak"]["solve_rate"] == pytest.approx(0.0)
-    assert "by model:" in summary.format_text()
-
-
-def test_single_model_run_gets_no_by_model_noise():
-    results = [_result("a", Status.VERIFIED, model="only")]
-    assert summarize(results, ks=(1,)).by_model == {}
-
-
-def test_samples_to_first_success_is_one_based():
-    results = [
-        _result("a", Status.FAILED, sample=0),
-        _result("a", Status.FAILED, sample=1),
-        _result("a", Status.VERIFIED, sample=2),
-    ]
-    summary = summarize(results, ks=(1,))
-    # Third sample succeeded, so three samples were drawn.
-    assert summary.samples_to_first_success.median == pytest.approx(3.0)
-
-
-def test_unsolved_tasks_do_not_enter_samples_to_first_success():
-    results = [_result("a", Status.FAILED, sample=i) for i in range(3)]
-    assert summarize(results, ks=(1,)).samples_to_first_success.count == 0
 
 
 def test_result_round_trips_tactics_and_structure():

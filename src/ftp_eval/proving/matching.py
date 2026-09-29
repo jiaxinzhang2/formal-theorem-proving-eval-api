@@ -53,9 +53,9 @@ from typing import Any, Mapping, Sequence
 
 import dataclasses
 
-from ..comments import strip_comments
-from ..soundness import HackClass, parse_label, screen_source
-from ..types import StatementTask, Status
+from ..shared.comments import strip_comments
+from ..shared.soundness import HackClass, parse_label, screen_source
+from ..shared.types import StatementTask, Status
 from .lean_file import (
     LeanDeclaration,
     LeanFile,

@@ -194,7 +194,7 @@ def summarize_contest(
         if answer.match:
             for mismatch in answer.match.mismatches:
                 if mismatch.kind.value == "reward_hacking":
-                    from ...soundness import parse_label
+                    from ...shared.soundness import parse_label
 
                     for violation in mismatch.detail.split("; "):
                         _, pattern_id = parse_label(violation)

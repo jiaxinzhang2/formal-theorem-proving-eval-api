@@ -16,15 +16,7 @@ import hashlib
 import time
 from typing import Any
 
-from ...types import (
-    BackendInfo,
-    Diagnostic,
-    ErrorKind,
-    ProofAttempt,
-    ProofTask,
-    Severity,
-    Status,
-)
+from ...shared.types import BackendInfo, Diagnostic, ErrorKind, ProofAttempt, ProofTask, Severity, Status
 from ..verifier import RawVerdict, Verifier, VerifierError
 
 __all__ = ["MockVerifier"]

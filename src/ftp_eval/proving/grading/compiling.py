@@ -28,7 +28,7 @@ from enum import Enum
 from typing import Any
 
 from ..matching import SubmissionMatcher
-from ...types import StatementTask, Status
+from ...shared.types import StatementTask, Status
 from .stages import StageStatus
 
 __all__ = ["CompileMode", "CompileOutcome", "compile_answer", "compile_standalone"]

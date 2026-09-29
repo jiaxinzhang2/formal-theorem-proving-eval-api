@@ -15,7 +15,7 @@ import re
 from dataclasses import dataclass
 from typing import Any, Mapping
 
-from ..comments import strip_comments
+from ..shared.comments import strip_comments
 
 __all__ = ["StatementComplexity", "analyze_statement", "STATEMENT_METRIC_FIELDS"]
 

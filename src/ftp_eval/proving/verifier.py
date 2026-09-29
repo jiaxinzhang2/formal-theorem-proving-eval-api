@@ -17,8 +17,8 @@ from .analysis.modes import classify_failure, classify_success
 from ..autoformalization.complexity import analyze_statement
 from .analysis.structure import analyze_proof
 from .analysis.tactics import extract_tactics
-from ..soundness import screen_source
-from ..types import (
+from ..shared.soundness import screen_source
+from ..shared.types import (
     Assembly,
     BackendInfo,
     Diagnostic,
@@ -32,6 +32,7 @@ from ..types import (
     Status,
     VerificationResult,
 )
+
 
 __all__ = [
     "Verifier",

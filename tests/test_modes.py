@@ -25,7 +25,6 @@ from ftp_eval import (
     create,
     extract_tactics,
     looks_truncated,
-    summarize,
 )
 from ftp_eval.proving.analysis.modes import (
     aggregate_failure_modes,
@@ -327,22 +326,6 @@ def test_reward_hacking_gets_the_soundness_failure_mode():
     result = backend.verify(task, ProofAttempt(task_id="t", proof=" MOCK_PASS ; sorry"))
     assert result.status is Status.REJECTED
     assert result.failure_mode == FailureMode.REWARD_HACKING.value
-
-
-def test_summary_reports_both_mode_tables():
-    backend = create("mock")
-    task = ProofTask(task_id="t", formal_statement="theorem t : True := by")
-    results = [
-        backend.verify(task, ProofAttempt(task_id="t", proof=" simp MOCK_PASS", sample_index=0)),
-        backend.verify(task, ProofAttempt(task_id="t", proof=" simp MOCK_FAIL", sample_index=1)),
-    ]
-    summary = summarize(results, ks=(1,))
-    assert summary.failure_modes.failures == 1
-    assert summary.success_modes.successes == 1
-    text = summary.format_text(include_tactics=True)
-    assert "failure modes" in text
-    assert "success modes" in text
-    assert "failure_modes" in summary.to_dict()
 
 
 def test_modes_round_trip_through_json():

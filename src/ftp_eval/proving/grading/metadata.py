@@ -57,6 +57,7 @@ __all__ = [
 #: ours to discard.
 METADATA_KEYS = (
     "mathdb_id",
+    "prose",
     "problem_id",
     "source",
     "source_locator",
@@ -82,6 +83,10 @@ class ProblemMetadata:
     #: The corresponding MathDB problem number, when the problem came from
     #: there. Kept as a string: identifiers are not arithmetic.
     mathdb_id: str = ""
+    #: The natural-language problem this file formalizes. Optional for
+    #: grading -- a proof check never reads it -- but `ftp-eval audit`
+    #: cannot judge faithfulness without it.
+    prose: str = ""
     source: str = ""
     source_locator: str = ""
     source_version: str = ""

@@ -50,6 +50,7 @@ __all__ = [
 ]
 
 
+
 class HackClass(str, Enum):
     """How a proof got an undeserved acceptance."""
 

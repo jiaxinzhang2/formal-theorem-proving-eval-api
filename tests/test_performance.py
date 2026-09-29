@@ -36,10 +36,9 @@ from ftp_eval import (
     create,
     extract_tactics,
     screen_source,
-    summarize,
 )
 from ftp_eval.proving.analysis.structure import sample_duplication
-from ftp_eval.soundness import PATTERNS, strip_comments
+from ftp_eval.shared.soundness import PATTERNS, strip_comments
 
 #: Ratio ceiling for a 4x size increase. Linear is 4, quadratic is 16.
 #: 9 leaves generous room for constant-factor and cache effects while
@@ -161,24 +160,6 @@ def test_statement_screening_is_subquadratic_with_shadowing_checks_on():
     )
 
 
-def test_summarize_is_subquadratic_in_result_count():
-    backend = create("mock")
-    task = ProofTask(task_id="t", formal_statement="theorem t : True := by")
-    template = backend.verify(task, ProofAttempt(task_id="t", proof=" simp MOCK_PASS"))
-
-    def build(n: int) -> list:
-        from dataclasses import replace
-
-        return [
-            replace(template, task_id="t%d" % (i // 5), attempt_id="a%d" % i, sample_index=i % 5)
-            for i in range(n)
-        ]
-
-    assert_subquadratic(
-        build, lambda results: summarize(results, ks=(1, 5)), small=500, large=2000, what="summarize"
-    )
-
-
 def test_sample_duplication_is_subquadratic():
     def build(n: int) -> dict:
         return {"t%d" % i: ["p%d" % (i % 3)] * 5 for i in range(n)}
@@ -212,34 +193,6 @@ def test_per_attempt_metric_cost_stays_small():
     )
     elapsed = measure(lambda: backend.verify(task, attempt), repeat=20)
     assert elapsed < 0.010, "verify took %.1fms per attempt" % (elapsed * 1000)
-
-
-def test_a_thousand_attempt_run_is_analyzed_quickly():
-    """End to end: 1000 attempts through verify plus summarize.
-
-    Measured at ~0.19s; bounded at 10s. If this fails, the analysis layer
-    has stopped being a rounding error next to the prover.
-    """
-    backend = create("mock")
-    tasks = [
-        ProofTask(task_id="t%d" % i, formal_statement="theorem t%d : True := by" % i)
-        for i in range(200)
-    ]
-    proofs = [" simp MOCK_PASS", " omega MOCK_FAIL", " nlinarith MOCK_UNSOLVED"]
-
-    started = time.perf_counter()
-    results = [
-        backend.verify(
-            task,
-            ProofAttempt(task_id=task.task_id, proof=proofs[s % len(proofs)], sample_index=s),
-        )
-        for task in tasks
-        for s in range(5)
-    ]
-    summarize(results, ks=(1, 5))
-    elapsed = time.perf_counter() - started
-    assert len(results) == 1000
-    assert elapsed < 10.0, "1000-attempt analysis took %.1fs" % elapsed
 
 
 def test_a_pathological_proof_does_not_hang():
