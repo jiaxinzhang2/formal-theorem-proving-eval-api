@@ -1,6 +1,6 @@
 """Durable run inputs, per-stage checkpoints and final reports.
 
-See docs/runs.md for the schema-v2 directory layout. Sources are saved before
+See docs/runs.md for the schema-v3 directory layout. Sources are saved before
 backend calls, events are flushed, and JSON snapshots are replaced atomically."""
 
 from __future__ import annotations
@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
 
 from ...spec.artifacts import ArtifactWriter
+from ...spec.stage import StageId
 from .results import GradedAnswer
 from .statistics import ContestStatistics
 
@@ -45,17 +46,21 @@ class RunDirectory(ArtifactWriter):
 
     root: Path
 
+    @property
+    def directory(self) -> Path:
+        return self.root
+
     @classmethod
     def create(
         cls, base: str | os.PathLike[str], run_id: str | None = None
     ) -> "RunDirectory":
         root = Path(base) / _safe(run_id or default_run_id())
         root.mkdir(parents=True, exist_ok=False)
-        for sub in ("1-interface", "2-kernel/logs", "3-axioms", "4-report", "answers"):
+        for sub in (*[s.directory for s in StageId], StageId.KERNEL.directory + "/logs", "answers"):
             (root / sub).mkdir(parents=True, exist_ok=True)
         writer = cls(root=root)
-        for relative in ("events.jsonl", "1-interface/all.jsonl", "1-interface/refused.jsonl",
-                         "2-kernel/all.jsonl", "3-axioms/all.jsonl"):
+        for relative in ("events.jsonl", "1-interface/refused.jsonl",
+                         *[s.directory + "/all.jsonl" for s in StageId if s not in (StageId.ENVIRONMENT, StageId.REPORT)]):
             writer._text(relative, "")
         return writer
 
@@ -173,7 +178,8 @@ class RunDirectory(ArtifactWriter):
     def write_run_stage(self, stage: str, status: str, payload: Any = None) -> None:
         record = {"stage": stage, "status": status, "payload": payload,
                   "recorded_at": datetime.now(timezone.utc).isoformat()}
-        self._json("4-report/stage.json" if stage == "report" else "inputs/stage.json", record)
+        directory = StageId(stage).directory if stage != "benchmark" else "inputs"
+        self._json(directory + "/stage.json", record)
         self._append("events.jsonl", record)
 
     def write_answers(self, graded: Sequence[GradedAnswer]) -> None:
@@ -183,7 +189,7 @@ class RunDirectory(ArtifactWriter):
 
     def write_stage(self, problem_id: str, participant: str, stage: str, event: Mapping[str, Any]) -> None:
         """Checkpoint before advancing; append history and replace the latest snapshot."""
-        directory = {"interface": "1-interface", "kernel": "2-kernel", "axioms": "3-axioms"}[stage]
+        directory = StageId(stage).directory
         record = {"problem_id": problem_id, "participant": participant,
                   "recorded_at": datetime.now(timezone.utc).isoformat(), **event}
         self._json("%s/by-answer/%s/%s.json" % (directory, _safe(participant or "anonymous"), _safe(problem_id)), record)
@@ -205,14 +211,14 @@ class RunDirectory(ArtifactWriter):
         self._json("run.json", manifest)
 
     def write_modules(self, answer: GradedAnswer) -> None:
-        """Preserve all three exact module sources, even for refused answers."""
+        """Preserve all exact module sources, even for refused answers."""
         stem = "%s/%s" % (_safe(answer.participant or "anonymous"), _safe(answer.problem_id))
         for module, source in answer.modules.items():
-            self._text("2-kernel/modules/%s/%s.lean" % (stem, module.replace(".", "/")), source)
+            self._text(StageId.KERNEL.directory + "/modules/%s/%s.lean" % (stem, module.replace(".", "/")), source)
         if answer.build:
             log = str(answer.build.raw.get("log", ""))
             if log:
-                self._text("2-kernel/logs/%s.log" % stem, log)
+                self._text(StageId.KERNEL.directory + "/logs/%s.log" % stem, log)
 
     def write_report(
         self,
@@ -243,9 +249,9 @@ class RunDirectory(ArtifactWriter):
             ),
         )
         self._text(
-            "4-report/by-problem.tsv",
+            StageId.REPORT.directory + "/by-problem.tsv",
             _tsv(
-                [("problem_id", "attempted", "solved", "solve_rate", "refused_interface", "refused_kernel", "refused_axioms")]
+                [("problem_id", "attempted", "solved", "solve_rate", "refused_interface", "refused_kernel", "refused_replay", "refused_dependencies", "refused_axioms")]
                 + [
                     (
                         p.problem_id,
@@ -254,6 +260,8 @@ class RunDirectory(ArtifactWriter):
                         "%.3f" % p.solve_rate,
                         p.refused_at_interface,
                         p.refused_at_kernel,
+                        p.refused_at_replay,
+                        p.refused_at_dependencies,
                         p.refused_at_axioms,
                     )
                     for p in statistics.by_problem
@@ -261,7 +269,7 @@ class RunDirectory(ArtifactWriter):
             ),
         )
         self._text(
-            "4-report/by-participant.tsv",
+            StageId.REPORT.directory + "/by-participant.tsv",
             _tsv(
                 [("participant", "solved", "attempted", "rejected")]
                 + [
@@ -271,7 +279,7 @@ class RunDirectory(ArtifactWriter):
             ),
         )
         self._text(
-            "4-report/reasons.tsv",
+            StageId.REPORT.directory + "/reasons.tsv",
             _tsv(
                 [("count", "stage", "reason")]
                 + [

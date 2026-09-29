@@ -4,7 +4,7 @@
 demo-2026/
   benchmark.json
   problems/P001.lean              namespace Problem; def Target ...
-  submissions/alice/P001.lean     imports Bench.P001; exports Submission.solution
+  submissions/alice/P001.lean     imports FtpEvalBench.P001; exports Submission.solution
   submissions/bob/P001.lean
 ```
 
@@ -12,7 +12,7 @@ A file's stem is its problem id. Each problem module defines `Problem.Target`.
 Problem modules are compiled independently, so that namespace can be reused for
 different problems. Answers may add arbitrary helpers inside `Submission`.
 
-Module names default to `Bench.<problem-id>`. Pin custom module names, gold values
+Module names default to `FtpEvalBench.<problem-id>`. Pin custom module names, gold values
 and policy explicitly in `benchmark.json`:
 
 ```json
@@ -20,10 +20,10 @@ and policy explicitly in `benchmark.json`:
   "name": "demo",
   "version": "2.0.0",
   "problems": {
-    "P001": {"module": "Bench.P001", "gold_arguments": ["1"]}
+    "P001": {"module": "FtpEvalBench.P001", "gold_arguments": ["1"]}
   },
   "policy": {
-    "allowed_imports": ["Mathlib", "Std", "Batteries", "Init", "Lean", "Aesop"],
+    "allowed_imports": ["Mathlib", "Std", "Batteries", "Init", "Aesop"],
     "allowed_axioms": ["propext", "Classical.choice", "Quot.sound"],
     "allow_global_instances": true,
     "isolate_builds": true
@@ -32,15 +32,22 @@ and policy explicitly in `benchmark.json`:
 }
 ```
 
-Gold arguments are Lean expressions. The generated check demands the gold type;
+Gold arguments are Lean expressions, frozen in a trusted Goal module before
+the answer is imported. The generated check demands that goal constant;
 the kernel decides definitional equality, without comparing argument strings.
 Their count must match Target's explicit parameter count. Without gold arguments,
-a value problem checks the answer's claimed value and records `against_gold=false`.
+a value problem freezes `∃ values, Problem.Target values`, infers witnesses from
+`Submission.solution`, and records `against_gold=false`. The claimed value is
+reported but is not copied back into the check's expression.
 
 The exact problem module import is always allowed. Other allowed names are module
 prefixes. No answer may import another submission or reopen `Problem`.
 Instances are allowed by default; setting `allow_global_instances=false` refuses
 instance declarations. Non-isolated builds are unsupported and rejected.
+Answers cannot extend syntax, macros or notation, or change attributes of imported
+declarations. Generated module roots cannot collide with project `lean_lib` names
+or trusted library roots. Existing answers using the old default `Bench.<id>`
+must import `FtpEvalBench.<id>` or explicitly configure a non-conflicting module.
 
 Only successful kernel and axiom checks count as solved. Missing answers are
 distinct from wrong answers. Misfiled files are reported separately.

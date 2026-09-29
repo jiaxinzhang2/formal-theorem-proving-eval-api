@@ -88,11 +88,14 @@ inside ``namespace Problem`` -- which would be reopening a sealed module.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import hashlib
+import re
 from enum import Enum
 from typing import Any, Callable, Mapping, Sequence
 
 from ..backends.soundness import (
     DEFAULT_ALLOWED_IMPORTS,
+    ANSWER_HACK_CLASSES,
     LEGITIMATE_AXIOMS,
     HackClass,
     SoundnessReport,
@@ -101,8 +104,9 @@ from ..backends.soundness import (
     parse_label,
     screen_source,
 )
-from ..backends.types import ModuleBuild, Status, Diagnostic, Severity
+from ..backends.types import ModuleBuild, ModuleSource, Status, Diagnostic, Severity
 from .lean_file import LeanFile, parse_lean_file
+from ..backends.comments import strip_comments
 
 __all__ = [
     "PROBLEM_NAMESPACE",
@@ -117,9 +121,12 @@ __all__ = [
     "check_interface",
     "check_arguments",
     "build_check_source",
+    "build_goal_module",
+    "build_submission_modules",
     "ContestPolicy",
     "InterfaceVerdict",
     "grade_interface",
+    "evaluate_submission",
 ]
 
 #: The sealed module's namespace. An answer may not declare into it.
@@ -158,6 +165,9 @@ class InterfaceFault(str, Enum):
     #: The file could not be parsed as Lean at all.
     UNPARSED = "unparsed"
     INSTANCE_NOT_ALLOWED = "instance_not_allowed"
+    SOLUTION_BINDERS = "solution_binders"
+    SYNTAX_EXTENSION = "syntax_extension"
+    IMPORTED_ATTRIBUTE = "imported_attribute"
 
 
 @dataclass(frozen=True)
@@ -172,7 +182,7 @@ class InterfaceProblem:
     """
 
     problem_id: str
-    #: The module an answer imports, e.g. ``Bench.P001``.
+    #: The module an answer imports, e.g. ``FtpEvalBench.P001``.
     module: str
     #: Names of Target's parameters, for the error messages only.
     target_parameters: tuple[str, ...] = ()
@@ -244,14 +254,25 @@ def read_interface_problem(
     transform it.
     """
     parsed = parse_lean_file(problem_source)
-    target = next(
-        (d for d in parsed.declarations if d.qualified_name == "Problem.Target"), None
-    )
-    if target is None:
+    targets = [d for d in parsed.declarations if d.qualified_name == "Problem.Target"]
+    if len(targets) != 1:
         raise ValueError("%s: expected a frozen Problem.Target definition" % problem_id)
-    parameters: tuple[str, ...] = ()
-    if target is not None:
-        parameters = _binder_names(target.signature)
+    target = targets[0]
+    if target.kind not in ("def", "abbrev"):
+        raise ValueError("%s: Problem.Target must be a def or abbrev returning Prop" % problem_id)
+    depth = 0
+    result_type = ""
+    for index, char in enumerate(target.signature):
+        if char in "([{":
+            depth += 1
+        elif char in ")]}":
+            depth -= 1
+        elif char == ":" and depth == 0:
+            result_type = target.signature[index + 1:].strip()
+            break
+    if result_type != "Prop":
+        raise ValueError("%s: Problem.Target requires an explicit result type : Prop" % problem_id)
+    parameters = _binder_names(target.signature)
     return InterfaceProblem(
         problem_id=problem_id, module=module, target_parameters=parameters
     )
@@ -339,7 +360,12 @@ def check_interface(
         )
 
     faults.extend(_namespace_faults(parsed))
+    if solution is not None and solution.signature.strip() and not solution.signature.lstrip().startswith(":"):
+        faults.append((InterfaceFault.SOLUTION_BINDERS,
+                       "Submission.solution must have no binders before its result type; "
+                       "put helper parameters on separate declarations and submit a closed solution"))
     faults.extend(_screen(answer_source, solution))
+    faults.extend(_extension_faults(answer_source))
     if allowed_imports is not None:
         faults.extend(_import_faults(parsed, allowed_imports, problem.module))
 
@@ -377,8 +403,8 @@ def _namespace_faults(parsed: LeanFile) -> list[tuple[InterfaceFault, str]]:
     into_problem = [
         d.qualified_name
         for d in parsed.declarations
-        if d.namespace == PROBLEM_NAMESPACE
-        or d.namespace.startswith(PROBLEM_NAMESPACE + ".")
+        if PROBLEM_NAMESPACE in d.namespace.split(".")
+        or PROBLEM_NAMESPACE in d.qualified_name.split(".")[:-1]
     ]
     if into_problem:
         out.append(
@@ -426,7 +452,8 @@ def _screen(answer_source: str, solution: Any) -> list[tuple[InterfaceFault, str
     into "cheated".
     """
     report = screen_source(
-        answer_source, "lean4", required_statement=None, allowed_imports=None
+        answer_source, "lean4", required_statement=None, allowed_imports=None,
+        classes=ANSWER_HACK_CLASSES,
     )
     violations = list(report.violations)
     if solution is not None and solution.is_unproved:
@@ -438,6 +465,34 @@ def _screen(answer_source: str, solution: Any) -> list[tuple[InterfaceFault, str
     if not violations:
         return []
     return [(InterfaceFault.REWARD_HACKING, "; ".join(violations))]
+
+
+def _extension_faults(source: str) -> list[tuple[InterfaceFault, str]]:
+    """Contest policy: answers may prove, but cannot extend the checker language."""
+    body = re.sub(r'"(?:\\.|[^"\\])*"', '""', strip_comments(source, "lean4"))
+    faults: list[tuple[InterfaceFault, str]] = []
+    extension = re.search(r"\b(notation|infixl|infixr|infix|prefix|postfix|macro_rules|macro|syntax|declare_syntax_cat|elab_rules|elab|run_tac)\b", body)
+    if extension:
+        faults.append((InterfaceFault.SYNTAX_EXTENSION,
+                       "answers must not extend Lean syntax or execute elaborator code (%s); inline local notation" % extension.group(1)))
+    namespace: list[str] = []
+    for line in body.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("namespace "):
+            namespace.append(stripped.split()[1])
+        elif stripped == "end" or stripped.startswith("end "):
+            if namespace:
+                namespace.pop()
+        if re.search(r"\battribute\b", stripped):
+            match = re.fullmatch(r"(?:local\s+)?attribute\s+\[[^\]]+\]\s+(.+)", stripped)
+            names = match.group(1).split() if match else []
+            scope = ".".join(namespace)
+            local_scope = scope == "Submission" or scope.startswith("Submission.")
+            if not names or any(not (name.removeprefix("_root_.").startswith("Submission.")
+                                     or (local_scope and "." not in name)) for name in names):
+                faults.append((InterfaceFault.IMPORTED_ATTRIBUTE,
+                               "attribute commands may target only Submission declarations"))
+    return faults
 
 
 def _import_faults(
@@ -461,7 +516,9 @@ def _import_faults(
         (
             InterfaceFault.IMPORT_NOT_ALLOWED,
             "the answer imports %s, which the benchmark does not allow. A "
-            "self-supplied module can carry its own axioms" % ", ".join(bad[:4]),
+            "self-supplied module can carry its own axioms. Import %s for this problem; "
+            "other allowed import prefixes: %s"
+            % (", ".join(bad[:4]), problem_module, ", ".join(allowed) or "none"),
         )
     ]
 
@@ -534,27 +591,31 @@ def build_check_source(
     answer_module: str,
     arguments: Sequence[str] = (),
 ) -> str:
-    """The third module: the ascription the kernel decides, and the audit.
+    """Check a frozen goal constant and audit its proof dependencies.
 
-    Nothing about the answer appears here except its module name and the
-    arguments. That is the point -- the check does not re-elaborate the
-    answer's text, it cites one constant and states the type it must have.
-
-    Pass the *gold* arguments when the benchmark knows them: the ascription
-    then rejects a wrong value by itself. See :func:`check_arguments`.
+    Gold expressions elaborate in the preceding trusted Goal module. For an
+    open value problem the Goal is existential; Lean infers the witness from
+    Submission.solution without re-parsing the answer's local value expression.
     """
     applied = " ".join("(%s)" % argument for argument in arguments)
-    target = problem.target + (" " + applied if applied else "")
+    goal = build_goal_module(problem)
+    target = ("_root_." + _goal_namespace(problem) + ".goal" if goal else
+              "_root_." + problem.target + (" " + applied if applied else ""))
+    proof = "%s.%s" % (SUBMISSION_NAMESPACE, SOLUTION_NAME)
+    if problem.wants_value and not problem.gold_arguments:
+        for _ in problem.target_parameters:
+            proof = "⟨_, %s⟩" % proof
     return "\n".join(
         [
             "import %s" % problem.module,
+            *(["import %s" % goal.module] if goal else []),
             "import %s" % answer_module,
             "",
             "-- The whole verdict. If this typechecks, the answer's proof term",
             "-- inhabits the proposition the problem froze before the answer",
             "-- existed -- whatever helpers it went through to get there.",
             "theorem %s : %s :=" % (CHECK_THEOREM, target),
-            "  %s.%s" % (SUBMISSION_NAMESPACE, SOLUTION_NAME),
+            "  " + proof,
             "",
             "-- Typechecking is not enough: `sorry` elaborates to `sorryAx` and",
             "-- a declared `axiom` passes the kernel with no complaint at all.",
@@ -563,6 +624,39 @@ def build_check_source(
             "",
         ]
     )
+
+
+def _goal_namespace(problem: InterfaceProblem) -> str:
+    digest = hashlib.sha256((problem.module + "\0" + "\0".join(problem.gold_arguments)).encode("utf-8")).hexdigest()[:20]
+    return "FtpEvalGoal.G" + digest
+
+
+def build_goal_module(problem: InterfaceProblem) -> ModuleSource | None:
+    """Freeze gold, or an existential value goal, before importing an answer."""
+    if not problem.gold_arguments and not problem.wants_value:
+        return None
+    namespace = _goal_namespace(problem)
+    applied = " ".join("(%s)" % value for value in problem.gold_arguments)
+    if problem.gold_arguments:
+        proposition = "_root_.Problem.Target " + applied
+    else:
+        parameters = ["ftp_value_%d" % i for i in range(len(problem.target_parameters))]
+        proposition = "∃ " + " ".join(parameters) + ", @_root_.Problem.Target " + " ".join(parameters)
+    source = ("import %s\nnamespace %s\ndef goal : Prop := %s\nend %s\n"
+              % (problem.module, namespace, proposition, namespace))
+    return ModuleSource(problem.module + ".Goal", source, cacheable=True)
+
+
+def build_submission_modules(problem: InterfaceProblem, problem_source: str,
+                             answer_source: str, answer_module: str,
+                             arguments: Sequence[str]) -> list[ModuleSource]:
+    modules = [ModuleSource(problem.module, problem_source, cacheable=True)]
+    goal = build_goal_module(problem)
+    if goal is not None:
+        modules.append(goal)
+    modules.extend([ModuleSource(answer_module, answer_source),
+                    ModuleSource(answer_module + ".Check", build_check_source(problem, answer_module, arguments))])
+    return modules
 
 
 @dataclass(frozen=True)
@@ -607,6 +701,8 @@ class ContestPolicy:
     #: build directory would let one participant's `.olean` be importable by
     #: another's, which makes a verdict depend on grading order.
     isolate_builds: bool = True
+    #: Require recorded kernel replay, in addition to ordinary compilation.
+    require_replay: bool = False
 
     def __post_init__(self) -> None:
         if not self.isolate_builds:
@@ -618,6 +714,7 @@ class ContestPolicy:
             "allowed_axioms": sorted(self.allowed_axioms),
             "allow_global_instances": self.allow_global_instances,
             "isolate_builds": self.isolate_builds,
+            "require_replay": self.require_replay,
         }
 
     def audit(self, axioms: "Sequence[str] | None") -> "SoundnessReport":
@@ -678,16 +775,22 @@ class InterfaceVerdict:
         """Which check refused it, or "" when none did."""
         if self.report is not None and not self.report.ok:
             return "interface"
+        for event in self.stages:
+            if event["stage"] in ("kernel", "replay", "dependencies") and event["status"] == "failed":
+                return str(event["stage"])
         if self.build is None:
             return ""  # not run, which is not a refusal
         if not self.build.verified:
-            return "kernel"
+            return str(self.build.raw.get("failed_stage") or "kernel")
         if self.axiom_audit is not None and not self.axiom_audit.ok:
             return "axioms"
         return ""
 
     @property
     def kernel_checked(self) -> bool:
+        kernel_events = [e for e in self.stages if e["stage"] == "kernel" and e["status"] != "running"]
+        if kernel_events:
+            return kernel_events[-1]["status"] in ("passed", "failed")
         return self.build is not None and self.build.status not in (Status.ERROR, Status.SKIPPED)
 
     def to_dict(self) -> dict[str, Any]:
@@ -766,24 +869,28 @@ def grade_interface(
     if not report.ok or verifier is None:
         why = "interface refused" if not report.ok else "no prover configured"
         record("kernel", "not_run", detail=why)
-        record("axioms", "not_run", detail="kernel check did not pass")
+        for stage in ("replay", "dependencies", "axioms"):
+            record(stage, "not_run", detail=why)
         return verdict
 
     arguments, against_gold = check_arguments(problem, report)
     verdict.against_gold = against_gold
     module = answer_module or "%s.Submission.%s" % (
-        problem.module.split(".")[0] or "Bench", participant or "answer",
+        problem.module.split(".")[0] or "FtpEvalBench", participant or "answer",
     )
-    check_source = build_check_source(problem, module, arguments)
-    from ..backends.types import ModuleSource
+    modules = build_submission_modules(problem, problem_source, answer_source, module, arguments)
 
     record("kernel", "running")
+
+    def backend_stage(stage: str, event: Mapping[str, Any]) -> None:
+        if stage not in ("kernel", "replay", "dependencies"):
+            raise ValueError("unknown backend stage: %s" % stage)
+        record(stage, str(event["status"]), event.get("payload"), str(event.get("detail", "")))
+
     try:
         build = verifier.build_modules(
-            [ModuleSource(problem.module, problem_source, cacheable=True),
-             ModuleSource(module, answer_source),
-             ModuleSource("%s.Check" % module, check_source)],
-            audit_declaration=CHECK_THEOREM, timeout_s=timeout_s,
+            modules,
+            audit_declaration=CHECK_THEOREM, timeout_s=timeout_s, on_stage=backend_stage,
         )
     except Exception as exc:
         build = ModuleBuild(Status.ERROR, diagnostics=(Diagnostic(Severity.ERROR, str(exc)),))
@@ -791,8 +898,20 @@ def grade_interface(
     status = "not_run" if build is None or build.status in (Status.ERROR, Status.SKIPPED) else (
         "passed" if build.verified else "failed"
     )
-    record("kernel", status, build.to_dict() if build else None,
-           "module builds unavailable" if build is None else "")
+    if not any(e["stage"] == "kernel" and e["status"] != "running" for e in verdict.stages):
+        record("kernel", status, build.to_dict() if build else None,
+               "module builds unavailable" if build is None else "")
+    for stage in ("replay", "dependencies"):
+        if not any(e["stage"] == stage and e["status"] != "running" for e in verdict.stages):
+            # Legacy adapters may return an axiom listing in one response,
+            # but cannot claim separately observed stage execution.
+            record(stage, "not_run", detail="backend did not report this phase")
+    replay_passed = any(e["stage"] == "replay" and e["status"] == "passed" for e in verdict.stages)
+    if ((policy.require_replay or getattr(verifier, "requires_replay", False))
+            and not replay_passed and build is not None and build.verified):
+        build.status = Status.ERROR
+        build.raw = {**build.raw, "failed_stage": "replay"}
+        build.diagnostics += (Diagnostic(Severity.ERROR, "required kernel replay did not pass"),)
     if build is not None and build.verified:
         record("axioms", "running")
         verdict.axiom_audit = policy.audit(build.axioms)
@@ -800,3 +919,7 @@ def grade_interface(
     else:
         record("axioms", "not_run", detail="kernel check did not pass")
     return verdict
+
+
+# Explicit public name; retained grade_interface spelling is source compatible.
+evaluate_submission = grade_interface

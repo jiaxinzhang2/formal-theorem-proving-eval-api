@@ -24,7 +24,7 @@ import tempfile
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Iterable, Sequence
+from typing import Any, Callable, Iterable, Mapping, Sequence
 
 from .types import (
     ModuleBuild,
@@ -265,8 +265,9 @@ def _normalize_binders(binders: str) -> str:
 #: ``'foo' depends on axioms: [propext, Classical.choice]`` -- or
 #: ``'foo' does not depend on any axioms``.
 _AXIOMS_LINE_RE = re.compile(
-    r"'(?P<name>[^']+)'\s+(?:depends on axioms:\s*\[(?P<axioms>[^\]]*)\]"
-    r"|does not depend on any axioms)",
+    r"^[ \t]*'(?P<name>[^']+)'\s+(?:depends on axioms:\s*\[(?P<axioms>[^\]]*)\]"
+    r"|does not depend on any axioms)[ \t]*$",
+    re.MULTILINE,
 )
 
 
@@ -277,15 +278,11 @@ def parse_printed_axioms(log: str, name: str) -> list[str] | None:
     on none, or ``None`` when no listing for ``name`` was found -- which
     means the audit did not run and must not be read as a clean result.
     """
-    for match in _AXIOMS_LINE_RE.finditer(log):
-        printed = match.group("name")
-        if printed != name and not printed.endswith("." + name):
-            continue
-        raw = match.group("axioms")
-        if raw is None:
-            return []
-        return [a.strip() for a in raw.split(",") if a.strip()]
-    return None
+    matches = [match for match in _AXIOMS_LINE_RE.finditer(log) if match.group("name") == name]
+    if len(matches) != 1:
+        return None
+    raw = matches[0].group("axioms")
+    return [] if raw is None else [a.strip() for a in raw.split(",") if a.strip()]
 
 
 #: Tactics tried when asking "is this goal trivially closable?". Cheap and
@@ -330,6 +327,7 @@ class Lean4Verifier(Verifier):
         keep_sources: str | os.PathLike[str] | None = None,
         audit_axioms: bool = True,
         axiom_audit_timeout_s: float = 180.0,
+        recheck: bool = False,
         **config: Any,
     ) -> None:
         super().__init__(**config)
@@ -337,6 +335,7 @@ class Lean4Verifier(Verifier):
         #: compile per verified attempt and is the strongest soundness
         #: evidence available, so it defaults on.
         self.audit_axioms = audit_axioms
+        self.recheck = recheck
         self.axiom_audit_timeout_s = axiom_audit_timeout_s
         raw_dir = project_dir or os.environ.get("FTP_EVAL_LEAN_PROJECT")
         self.project_dir = Path(raw_dir).expanduser().resolve() if raw_dir else None
@@ -344,6 +343,8 @@ class Lean4Verifier(Verifier):
         self.memory_mb = memory_mb
         self.max_heartbeats = max_heartbeats
         self.extra_args = tuple(extra_args)
+        self._module_capabilities: dict[str, bool] = {}
+        self.module_support_detail = ""
         #: Where to keep generated .lean files for debugging; None = temp.
         self.keep_sources = Path(keep_sources) if keep_sources else None
         if self.keep_sources:
@@ -397,6 +398,9 @@ class Lean4Verifier(Verifier):
                 timeout=120,
             )
             version = (proc.stdout or proc.stderr).strip().splitlines()[0] if proc.stdout or proc.stderr else None
+            if proc.returncode:
+                return BackendInfo(self.name, self.language, False,
+                                   detail="lake env lean failed: %s" % (version or proc.returncode))
         except Exception as exc:
             return BackendInfo(
                 self.name, self.language, False, detail="lake env lean failed: %s" % exc
@@ -549,7 +553,6 @@ class Lean4Verifier(Verifier):
     # -- ordered multi-module builds ------------------------------------
 
     #: Probed once, then remembered: None = not asked yet.
-    _modules_supported: bool | None = None
 
     def build_modules(
         self,
@@ -557,6 +560,7 @@ class Lean4Verifier(Verifier):
         *,
         audit_declaration: str = "",
         timeout_s: float = 300.0,
+        on_stage: Callable[[str, Mapping[str, Any]], None] | None = None,
     ) -> ModuleBuild | None:
         """Compile modules in order, each able to import the ones before it.
 
@@ -569,8 +573,7 @@ class Lean4Verifier(Verifier):
             raise BackendUnavailable(info.detail or "lean4 backend unavailable")
         if not modules:
             return None
-        if not self.supports_module_builds():
-            return None
+        self.preflight_modules(modules)
         assert self.project_dir is not None
 
         root = self.project_dir / ".ftp_eval_build"
@@ -580,56 +583,142 @@ class Lean4Verifier(Verifier):
         run_root = runs / ("answer-" + uuid.uuid4().hex)
         run_root.mkdir()
         started = time.monotonic()
-        search: list[Path] = []
+        staged = run_root / "modules"
+        staged.mkdir()
+        search: list[Path] = [staged]
         reused = False
+
+        def emit(stage: str, status: str, result: ModuleBuild | None = None) -> None:
+            if on_stage is not None:
+                on_stage(stage, {"status": status, "payload": result.to_dict() if result else None})
+
+        def finish(outcome: ModuleBuild, stage: str = "") -> ModuleBuild:
+            outcome.compile_time_s = time.monotonic() - started
+            outcome.reused_cache = reused
+            outcome.raw = {**outcome.raw, "failed_stage": stage, "module_sources": {
+                m.module: self._with_options(m.source) for m in modules
+            }}
+            return outcome
+
         try:
-            for module in modules:
+            home = run_root
+            for index, module in enumerate(modules):
                 if module.cacheable:
                     cache_key = {
                         "module": module.module, "source": self._with_options(module.source),
                         "toolchain": (self.project_dir / "lean-toolchain").read_text(encoding="utf-8") if (self.project_dir / "lean-toolchain").exists() else "",
                         "lake_manifest": (self.project_dir / "lake-manifest.json").read_text(encoding="utf-8") if (self.project_dir / "lake-manifest.json").exists() else "",
                         "extra_args": self.extra_args,
+                        "backend_environment": self.cache_environment(),
+                        "trusted_dependencies": [(m.module, hashlib.sha256(self._with_options(m.source).encode("utf-8")).hexdigest())
+                                                 for m in modules[:index] if m.cacheable],
                     }
                     digest = hashlib.sha256(json.dumps(cache_key, sort_keys=True).encode("utf-8")).hexdigest()[:24]
                     home = cache_root / digest
                     olean = home / Path(*module.path_parts).with_suffix(".olean")
-                    if home not in search:
-                        search.append(home)
                     if olean.exists():
                         # Keyed by content, so a hit is the same source, not
                         # merely the same name.
                         reused = True
+                        destination = staged / Path(*module.path_parts).with_suffix(".olean")
+                        destination.parent.mkdir(parents=True, exist_ok=True)
+                        shutil.copyfile(olean, destination)
                         continue
                 else:
-                    home = run_root
-                    if home not in search:
-                        search.append(home)
+                    # Later source files are never written into a directory
+                    # previously writable by an untrusted compilation.
+                    home = staged
 
-                outcome = self._build_one(module, home, search, timeout_s)
+                outcome = self._build_one(module, home, search if home == staged else [*search, home], timeout_s)
                 if outcome is not None:
-                    outcome.compile_time_s = time.monotonic() - started
-                    outcome.reused_cache = reused
-                    outcome.raw = {**outcome.raw, "module_sources": {
-                        m.module: self._with_options(m.source) for m in modules
-                    }}
-                    return outcome
+                    emit("kernel", "not_run" if outcome.status is Status.ERROR else "failed", outcome)
+                    return finish(outcome, "kernel")
+                if home != staged:
+                    olean = home / Path(*module.path_parts).with_suffix(".olean")
+                    if olean.exists():
+                        destination = staged / Path(*module.path_parts).with_suffix(".olean")
+                        destination.parent.mkdir(parents=True, exist_ok=True)
+                        shutil.copyfile(olean, destination)
 
+            emit("kernel", "passed", ModuleBuild(Status.VERIFIED))
+            replay = None
+            if self.recheck and audit_declaration:
+                emit("replay", "running")
+                replay = self._replay_last(modules[-1].module, search, timeout_s)
+                emit("replay", "passed" if replay.verified else "failed", replay)
+                if not replay.verified:
+                    return finish(replay, "replay")
+            else:
+                emit("replay", "not_run")
+
+            if not audit_declaration:
+                emit("dependencies", "not_run")
+                return finish(ModuleBuild(Status.VERIFIED))
+
+            emit("dependencies", "running")
             audited = self._audit_last(
-                modules[-1], run_root if not modules[-1].cacheable else cache_root,
+                modules[-1], home,
                 search, audit_declaration, timeout_s,
             )
-            audited.compile_time_s = time.monotonic() - started
-            audited.reused_cache = reused
-            audited.raw = {**audited.raw, "module_sources": {
-                m.module: self._with_options(m.source) for m in modules
-            }}
-            return audited
+            if audited.verified and audited.axioms is None and audit_declaration:
+                audited.status = Status.ERROR
+                audited.diagnostics += (Diagnostic(Severity.ERROR, "axiom dependency listing missing"),)
+            emit("dependencies", "passed" if audited.verified else "failed", audited)
+            if replay is not None:
+                audited.raw = {**audited.raw, "replay": replay.to_dict()}
+            return finish(audited, "" if audited.verified else "dependencies")
         finally:
             if not self.keep_sources:
                 shutil.rmtree(run_root, ignore_errors=True)
 
-    def supports_module_builds(self) -> bool:
+    def cache_environment(self) -> Mapping[str, Any]:
+        """Runtime identity beyond the project's pinned manifest."""
+        return {"lean_version": self.info().version}
+
+    def _replay_last(self, module: str, search: Sequence[Path], timeout_s: float) -> ModuleBuild:
+        """Replay compiled declarations using the toolchain's kernel checker.
+
+        This is a separate process, not a second execution of answer tactics.
+        It uses the official kernel; it is not an independent kernel implementation.
+        """
+        proc = self._run_tool("leanchecker", ["--fresh", module], search, timeout_s)
+        if proc is None:
+            return ModuleBuild(Status.TIMEOUT, failed_module=module, error_kind=ErrorKind.TIMEOUT)
+        log = (proc.stdout or "") + ("\n" + proc.stderr if proc.stderr else "")
+        return ModuleBuild(Status.VERIFIED if proc.returncode == 0 else Status.FAILED,
+                           failed_module=module if proc.returncode else "",
+                           diagnostics=tuple(parse_lean_log(log)),
+                           raw={"checker": "leanchecker", "fresh": True,
+                                "exit_code": proc.returncode, "log": log})
+
+    def library_prefixes(self) -> set[str]:
+        if self.project_dir is None:
+            return set()
+        prefixes: set[str] = set()
+        toml = self.project_dir / "lakefile.toml"
+        lean = self.project_dir / "lakefile.lean"
+        if toml.exists():
+            text = toml.read_text(encoding="utf-8")
+            for block in re.split(r"(?m)^\s*\[\[lean_lib\]\]\s*", text)[1:]:
+                block = re.split(r"(?m)^\s*\[", block)[0]
+                match = re.search(r'(?m)^\s*name\s*=\s*"([^".]+)', block)
+                if match:
+                    prefixes.add(match.group(1))
+        if lean.exists():
+            prefixes.update(re.findall(r"\blean_lib\s+([A-Za-z_][A-Za-z0-9_]*)", lean.read_text(encoding="utf-8")))
+        return prefixes
+
+    def preflight_modules(self, modules: Sequence[ModuleSource]) -> None:
+        prefixes = {module.path_parts[0] for module in modules}
+        conflicts = prefixes & (self.library_prefixes() | {"Lean", "Init", "Std", "Mathlib", "Aesop", "Batteries"})
+        if conflicts:
+            raise BackendUnavailable("generated module prefix conflicts with a project lean_lib or trusted library: %s; "
+                                     "choose FtpEvalBench and update the answer import" % ", ".join(sorted(conflicts)))
+        for prefix in sorted(prefixes):
+            if not self.supports_module_builds(module_prefix=prefix):
+                raise BackendUnavailable(self.module_support_detail or "module imports unavailable for prefix " + prefix)
+
+    def supports_module_builds(self, *, module_prefix: str = "FtpEvalBench") -> bool:
         """Whether an inherited LEAN_PATH actually reaches ``lake env lean``.
 
         Probed rather than assumed, with a throwaway pair: a module declaring
@@ -637,27 +726,34 @@ class Lean4Verifier(Verifier):
         resolve, multi-module grading is unavailable on this toolchain and
         says so, instead of reporting every answer as failing to compile.
         """
-        if self._modules_supported is not None:
-            return self._modules_supported
-        if self.project_dir is None:
-            self._modules_supported = False
+        if not self.info().available or self.project_dir is None:
+            self.module_support_detail = "backend unavailable; module capability was not probed"
             return False
-        probe_root = self.project_dir / ".ftp_eval_build" / "probe"
+        if module_prefix in self.library_prefixes():
+            self.module_support_detail = "module prefix %s conflicts with project lean_lib" % module_prefix
+            return False
+        if module_prefix in self._module_capabilities:
+            return self._module_capabilities[module_prefix]
+        probe_root = self.project_dir / ".ftp_eval_build" / ("probe-" + uuid.uuid4().hex)
         try:
-            base = ModuleSource("FtpEvalProbeBase", "def ftpEvalProbe : Nat := 1\n")
+            name = module_prefix + ".Probe" + uuid.uuid4().hex
+            base = ModuleSource(name, "def ftpEvalProbe : Nat := 1\n")
             top = ModuleSource(
-                "FtpEvalProbeTop",
-                "import FtpEvalProbeBase\n\nexample : ftpEvalProbe = 1 := rfl\n",
+                name + ".Check",
+                "import %s\n\nexample : ftpEvalProbe = 1 := rfl\n" % name,
             )
             failed = self._build_one(base, probe_root, [probe_root], 120.0)
             if failed is None:
                 failed = self._build_one(top, probe_root, [probe_root], 120.0)
-            self._modules_supported = failed is None
-        except Exception:  # pragma: no cover - a broken toolchain is "no"
-            self._modules_supported = False
+            self._module_capabilities[module_prefix] = failed is None
+            self.module_support_detail = "" if failed is None else (
+                "module import probe failed for prefix %s: %s" % (module_prefix, failed.raw.get("log", failed.status.value)))
+        except Exception as exc:  # pragma: no cover - a broken toolchain is "no"
+            self._module_capabilities[module_prefix] = False
+            self.module_support_detail = "module probe failed for %s: %s" % (module_prefix, exc)
         finally:
             shutil.rmtree(probe_root, ignore_errors=True)
-        return bool(self._modules_supported)
+        return self._module_capabilities[module_prefix]
 
     def _build_one(
         self,
@@ -748,11 +844,17 @@ class Lean4Verifier(Verifier):
         exactly what :meth:`supports_module_builds` probes, so this method
         never has to assume it.
         """
+        return self._run_tool("lean", arguments, search, timeout_s)
+
+    def _run_tool(
+        self, tool: str, arguments: Sequence[str], search: Sequence[Path], timeout_s: float
+    ) -> Any:
         assert self.project_dir is not None
-        cmd = [self._lake_path(), "env", "lean"]
-        if self.memory_mb:
-            cmd.append("--memory=%d" % self.memory_mb)
-        cmd.extend(self.extra_args)
+        cmd = [self._lake_path(), "env", tool]
+        if tool == "lean":
+            if self.memory_mb:
+                cmd.append("--memory=%d" % self.memory_mb)
+            cmd.extend(self.extra_args)
         cmd.extend(arguments)
 
         env = dict(os.environ)

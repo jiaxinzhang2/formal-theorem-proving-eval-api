@@ -15,8 +15,11 @@ control flow and persistence; they are not real kernel verification.
 - `test_cli_and_io.py`: CLI, registry, JSONL and HTTP mapping.
 - `test_layering.py`: AST import boundaries and implemented benchmark/artifact contracts.
 - `test_reward_hacking.py`, `test_soundness.py`, `test_comments.py`: source screening.
-- `test_problem_health.py`, `test_statement_and_judge.py`: independent original-statement auditing.
-- `test_lean4_parsing.py`: Lean diagnostics; `test_module_builds.py`: isolated build mechanics.
+- `test_problem_health.py`, `test_statement_and_judge.py`: statement auditing.
+- `test_frozen_regressions.py`: frozen probes, syntax policy, gold boundary,
+  environment pins, generic storage and safe container output.
+- `test_lean4_parsing.py`: Lean diagnostics; `test_module_builds.py`: isolated
+  builds, real module-name probes, replay failure paths and trusted cache identity.
 - Analysis, mode and performance tests cover proof metrics and scaling.
 
 The speed script measures Python analysis and grading overhead with the mock

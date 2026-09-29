@@ -119,6 +119,7 @@ def cmd_grade(args: argparse.Namespace) -> int:
             run_id=args.run_id,
             on_grade=on_grade,
             run_metadata=_parse_options(args.run_metadata),
+            strict_environment=args.strict_environment,
         )
     finally:
         if verifier is not None:
@@ -191,7 +192,10 @@ def cmd_audit(args: argparse.Namespace) -> int:
             )
             verdict = checker.check(task)
             verdicts.append(verdict)
-            report = check_problem_health(verifier, task, timeout_s=args.timeout)
+            interface = problem_set.manifest.raw.get("problems", {}).get(problem_id, {})
+            report = check_problem_health(verifier, task, timeout_s=args.timeout,
+                                          module=interface.get("module", ""),
+                                          gold_arguments=interface.get("gold_arguments", ()))
             health.append(report)
             if not args.quiet:
                 failures = verdict.failures or report.failures
@@ -408,6 +412,8 @@ def build_parser() -> argparse.ArgumentParser:
     p_grade.add_argument(
         "--out", default="runs", help="results root (default: runs; one subdirectory per run)"
     )
+    p_grade.add_argument("--strict-environment", action="store_true",
+                         help="reject missing or mismatched exact toolchain/dependency pins before grading")
     p_grade.add_argument("--run-id", help="name the run directory (default: a UTC timestamp)")
     p_grade.add_argument("--timeout", type=float, default=300.0, help="seconds per compile")
     p_grade.add_argument("--quiet", action="store_true")

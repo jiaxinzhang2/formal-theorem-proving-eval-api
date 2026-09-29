@@ -37,6 +37,7 @@ _REGISTRY: dict[str, Callable[..., Verifier]] = {}
 _BUILTINS: dict[str, tuple[str, str]] = {
     "mock": ("ftp_eval.backends.mock", "MockVerifier"),
     "lean4": ("ftp_eval.backends.lean4", "Lean4Verifier"),
+    "lean4-docker": ("ftp_eval.backends.lean4_docker", "Lean4DockerVerifier"),
     "axle": ("ftp_eval.backends.axle", "AxleVerifier"),
 }
 

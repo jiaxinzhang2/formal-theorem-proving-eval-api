@@ -1,17 +1,14 @@
-/-
-Generated, not written by hand. This is the entire verdict.
-
-Note what is absent: the answer's text. The check cites one constant and
-states the type it must have. If this typechecks, every helper the answer
-went through really does combine into a proof of the asked proposition.
--/
 import Problem
+import Problem.Goal
 import Answer
 
-theorem ftp_eval_target : Problem.Target (1) :=
+-- The whole verdict. If this typechecks, the answer's proof term
+-- inhabits the proposition the problem froze before the answer
+-- existed -- whatever helpers it went through to get there.
+theorem ftp_eval_target : _root_.FtpEvalGoal.G354e868b7ec5a424c2ef.goal :=
   Submission.solution
 
--- Typechecking is not the bar. `sorry` elaborates to `sorryAx` and Lean
--- reports a warning; a declared `axiom` passes with no complaint at all.
+-- Typechecking is not enough: `sorry` elaborates to `sorryAx` and
+-- a declared `axiom` passes the kernel with no complaint at all.
 -- This listing is the only place either one shows up.
 #print axioms ftp_eval_target

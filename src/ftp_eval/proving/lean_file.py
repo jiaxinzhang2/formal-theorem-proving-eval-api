@@ -221,10 +221,6 @@ class LeanFile:
         """
         return tuple(d for d in self.declarations if not d.is_statement)
 
-    def anonymous_definitions(self) -> tuple[LeanDeclaration, ...]:
-        """Vocabulary with no name, so it can only be compared by its text."""
-        return tuple(d for d in self.definitions() if not d.name)
-
     def imports(self) -> tuple[str, ...]:
         return tuple(re.findall(r"^\s*(?:public\s+)?import\s+(\S+)", self.preamble, re.MULTILINE))
 

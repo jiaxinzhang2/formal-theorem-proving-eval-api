@@ -15,7 +15,7 @@
   },
   "problems": {
     "P001": {
-      "module": "Bench.P001",
+      "module": "FtpEvalBench.P001",
       "gold_arguments": [
         "1"
       ]
@@ -27,7 +27,6 @@
       "Std",
       "Batteries",
       "Init",
-      "Lean",
       "Aesop"
     ],
     "allowed_axioms": [

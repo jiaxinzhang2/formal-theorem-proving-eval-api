@@ -11,7 +11,7 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
 
-from ..interface import ContestPolicy, InterfaceFault, grade_interface, read_interface_problem, build_check_source, check_arguments, check_interface
+from ..interface import ContestPolicy, InterfaceFault, grade_interface, read_interface_problem, build_submission_modules, check_arguments, check_interface
 from .artifacts import RunDirectory
 
 from .metadata import (
@@ -21,8 +21,10 @@ from .metadata import (
     observed_toolchain,
     parse_problem_metadata,
     reconcile_toolchain,
+    validate_environment,
 )
 from ...spec.benchmark import Benchmark, BenchmarkProblem
+from ...spec.artifacts import ArtifactWriter
 from ...backends.types import Diagnostic, Severity, Status, ModuleSource
 from ..lean_file import parse_lean_file
 from ..analysis.measure import proof_metrics
@@ -39,6 +41,7 @@ __all__ = [
     "load_problem_set",
     "load_submissions",
     "grade_contest",
+    "evaluate_benchmark",
 ]
 
 #: Files in a submission directory that are not answers.
@@ -88,7 +91,11 @@ class ProblemSet(Benchmark):
         )
 
     def manifest_fields(self) -> Mapping[str, Any]:
-        return self.manifest.to_dict()
+        return {**self.manifest.raw, "name": self.manifest.name,
+                "version": self.manifest.version, "description": self.manifest.description,
+                "language": self.manifest.language,
+                "toolchain": {**self.manifest.raw.get("toolchain", {}),
+                              "lean": self.manifest.lean, "mathlib_rev": self.manifest.mathlib_rev}}
 
     def source_for(self, problem_id: str) -> str:
         """The problem file's Lean source."""
@@ -342,11 +349,11 @@ def grade_answer(
     gold_arguments: Sequence[str] = (),
     policy: ContestPolicy | None = None,
     timeout_s: float = 300.0,
-    run_directory: RunDirectory | None = None,
+    run_directory: ArtifactWriter | None = None,
 ) -> GradedAnswer:
     """Check the interface, the frozen target's type, and its axiom closure."""
     problem = read_interface_problem(
-        problem_source, problem_id=problem_id, module=module or "Bench." + problem_id
+        problem_source, problem_id=problem_id, module=module or "FtpEvalBench." + problem_id
     )
     problem = replace(problem, gold_arguments=tuple(gold_arguments))
     ModuleSource(problem.module, problem_source)  # Validate before saving module paths.
@@ -366,7 +373,7 @@ def grade_answer(
             if stage == "kernel" and event["status"] == "running":
                 report = check_interface(problem, answer_source)
                 arguments, _ = check_arguments(problem, report)
-                prepared.modules = {**prepared.modules, answer_module + ".Check": build_check_source(problem, answer_module, arguments)}
+                prepared.modules = {m.module: m.source for m in build_submission_modules(problem, problem_source, answer_source, answer_module, arguments)}
                 run_directory.write_modules(prepared)
             run_directory.write_stage(problem_id, participant, stage, event)
 
@@ -378,10 +385,7 @@ def grade_answer(
     graded = GradedAnswer(**vars(verdict))
     assert verdict.report is not None
     arguments, _ = check_arguments(problem, verdict.report)
-    graded.modules = {
-        **prepared.modules,
-        answer_module + ".Check": build_check_source(problem, answer_module, arguments),
-    }
+    graded.modules = {m.module: m.source for m in build_submission_modules(problem, problem_source, answer_source, answer_module, arguments)}
     diagnostics = tuple(d.message for d in verdict.build.diagnostics) if verdict.build else ()
     _attach_metrics(graded, problem_source, answer_source, diagnostics)
     if run_directory is not None:
@@ -419,7 +423,13 @@ def _attach_metrics(
     which is the difference between a usable breakdown and a useless one.
     """
     target = "Submission.solution"
-    statement = problem_source
+    parsed_problem = parse_lean_file(problem_source)
+    frozen = next((d for d in parsed_problem.declarations if d.qualified_name == "Problem.Target"), None)
+    statement = ""
+    if frozen is not None and frozen.body.strip() and not frozen.body.lstrip().startswith("by"):
+        # Measure the proposition itself, with its binders, rather than the module
+        # or the result sort Prop. Unsupported tactic-defined targets stay absent.
+        statement = frozen.signature.rsplit(":", 1)[0] + ": " + frozen.body
     graded.tactics, graded.structure = proof_metrics(
         _answer_proof(answer_source, target), statement
     )
@@ -448,7 +458,7 @@ def _attach_metrics(
 
 
 def grade_contest(
-    problem_set: ProblemSet,
+    problem_set: Benchmark,
     submissions: Sequence[Submission],
     *,
     verifier: Any = None,
@@ -458,27 +468,31 @@ def grade_contest(
     on_grade: Callable[[GradedAnswer], None] | None = None,
     policy: ContestPolicy | None = None,
     run_metadata: Mapping[str, Any] | None = None,
+    writer: ArtifactWriter | None = None,
+    strict_environment: bool = False,
 ) -> ContestResult:
     """Grade the whole benchmark and write the results directory."""
+    problem_set = snapshot_benchmark(problem_set)
+    if writer is not None and output_dir is not None:
+        raise ValueError("choose writer or output_dir, not both")
     policy = policy or policy_from_manifest(problem_set.manifest)
     interfaces = problem_set.manifest.raw.get("problems", {})
     if not isinstance(interfaces, dict):
         raise ValueError("benchmark problems must be an object keyed by problem id")
-    run_directory = (
-        RunDirectory.create(output_dir, run_id) if output_dir is not None else None
-    )
+    run_directory: ArtifactWriter | None = writer or (
+        RunDirectory.create(output_dir, run_id) if output_dir is not None else None)
     result = ContestResult(
         problem_ids=problem_set.ids()
     )
 
-    observed = observed_toolchain(verifier)
+    observed: dict[str, Any] = {}
     if run_directory is not None:
         run_directory.write_manifest(
             problems=problem_set.problems, participants=[s.participant for s in submissions],
             backend=getattr(verifier, "name", None), problem_metadata=problem_set.metadata,
             benchmark=problem_set.manifest, observed_toolchain=observed,
-            toolchain_warnings=reconcile_toolchain(problem_set.manifest, observed),
-            extra={"schema_version": 2, "grading": "frozen-interface", "status": "running",
+            toolchain_warnings=(),
+            extra={"schema_version": 3, "grading": "frozen-interface", "status": "running",
                    "kernel_checked": False, "policy": policy.to_dict(),
                    "interfaces": interfaces, "run_metadata": dict(run_metadata or {}),
                    "timeout_s": timeout_s,
@@ -488,6 +502,39 @@ def grade_contest(
     try:
         if run_directory is not None:
             run_directory.write_inputs(problem_set.problems, submissions)
+            run_directory.write_run_stage("environment", "running")
+        observed = observed_toolchain(verifier)
+        if run_directory is not None:
+            run_directory.set_state("running", toolchain={
+                "declared": problem_set.manifest.to_dict()["declared_toolchain"],
+                "observed": observed, "warnings": reconcile_toolchain(problem_set.manifest, observed)})
+        strict_environment = strict_environment or getattr(verifier, "requires_strict_environment", False)
+        environment_errors = validate_environment(problem_set.manifest, observed) if strict_environment else []
+        capability = getattr(verifier, "supports_module_builds", None)
+        if callable(capability):
+            try:
+                if not capability():
+                    environment_errors.append("backend cannot compile/import frozen modules; benchmark grading is unavailable")
+            except Exception as exc:
+                environment_errors.append("module capability probe failed: %s" % exc)
+        elif strict_environment and not callable(capability):
+            environment_errors.append("official evaluation requires a verified module-build capability")
+        preflight_modules = getattr(verifier, "preflight_modules", None)
+        if callable(preflight_modules) and not environment_errors:
+            try:
+                planned = [ModuleSource(interfaces.get(pid, {}).get("module", "FtpEvalBench." + pid), source)
+                           for pid, source in problem_set.problems.items()]
+                planned.append(ModuleSource("FtpSubmission.Probe.Check", ""))
+                preflight_modules(planned)
+            except Exception as exc:
+                environment_errors.append(str(exc))
+        environment_result = {"strict": strict_environment, "errors": environment_errors,
+                              "observed": observed}
+        if run_directory is not None:
+            run_directory.write_run_stage("environment", "failed" if environment_errors else "passed", environment_result)
+            run_directory.set_state("running", environment_check=environment_result)
+        if environment_errors:
+            raise ValueError("strict environment preflight failed: " + "; ".join(environment_errors))
         for submission in submissions:
             participant = ParticipantResult(
                 participant=submission.participant,
@@ -509,7 +556,7 @@ def grade_contest(
                     verifier=verifier,
                     timeout_s=timeout_s,
                     run_directory=run_directory,
-                    module=config.get("module", "Bench." + problem_id),
+                    module=config.get("module", "FtpEvalBench." + problem_id),
                     gold_arguments=gold,
                     policy=policy,
                 )
@@ -544,7 +591,7 @@ def grade_contest(
                 graded=result.grades(),
             )
             run_directory.write_run_stage("report", "passed", result.statistics.to_dict())
-            result.run_directory = run_directory.root
+            result.run_directory = run_directory.directory
     except BaseException as exc:
         if run_directory is not None:
             run_directory.set_state("interrupted" if isinstance(exc, (KeyboardInterrupt, SystemExit)) else "failed", error=str(exc))
@@ -554,12 +601,38 @@ def grade_contest(
     return result
 
 
+def snapshot_benchmark(benchmark: Benchmark) -> ProblemSet:
+    """Read the public Benchmark contract once; freeze a run's inputs in memory."""
+    fields = dict(benchmark.manifest_fields())
+    toolchain = fields.get("toolchain", {})
+    if not isinstance(toolchain, dict):
+        raise ValueError("benchmark toolchain must be an object")
+    manifest = BenchmarkManifest(name=str(fields.get("name") or benchmark.name),
+                                 version=str(fields.get("version") or ""),
+                                 description=str(fields.get("description") or ""),
+                                 language=str(fields.get("language") or "lean4"),
+                                 lean=str(toolchain.get("lean") or ""),
+                                 mathlib_rev=str(toolchain.get("mathlib_rev") or ""), raw=fields)
+    problems, metadata = {}, {}
+    for item in benchmark.iter_problems():
+        if item.problem_id in problems:
+            raise ValueError("duplicate problem id: %s" % item.problem_id)
+        if item.target != "Problem.Target":
+            raise ValueError("benchmark must export the frozen Problem.Target interface")
+        problems[item.problem_id] = item.source
+        metadata[item.problem_id] = item.metadata if isinstance(item.metadata, ProblemMetadata) else parse_problem_metadata(item.source, problem_id=item.problem_id)
+    return ProblemSet(problems, metadata=metadata, manifest=manifest)
+
+
+evaluate_benchmark = grade_contest
+
+
 def policy_from_manifest(manifest: BenchmarkManifest) -> ContestPolicy:
     """Load explicit benchmark policy; reject misspelled or malformed knobs."""
     data = manifest.raw.get("policy", {})
     if not isinstance(data, dict):
         raise ValueError("benchmark policy must be an object")
-    unknown = set(data) - {"allowed_imports", "allowed_axioms", "allow_global_instances", "isolate_builds"}
+    unknown = set(data) - {"allowed_imports", "allowed_axioms", "allow_global_instances", "isolate_builds", "require_replay"}
     if unknown:
         raise ValueError("unknown policy fields: %s" % ", ".join(sorted(unknown)))
     fields = dict(data)
@@ -569,7 +642,7 @@ def policy_from_manifest(manifest: BenchmarkManifest) -> ContestPolicy:
             if not isinstance(values, list) or not all(isinstance(x, str) and x for x in values):
                 raise ValueError("%s must be a list of non-empty names" % name)
             fields[name] = tuple(values) if name == "allowed_imports" else frozenset(values)
-    for name in ("allow_global_instances", "isolate_builds"):
+    for name in ("allow_global_instances", "isolate_builds", "require_replay"):
         if name in fields and not isinstance(fields[name], bool):
             raise ValueError("%s must be a boolean" % name)
     return ContestPolicy(**fields)

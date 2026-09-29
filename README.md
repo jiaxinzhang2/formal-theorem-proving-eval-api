@@ -4,7 +4,8 @@ A Lean 4 evaluation framework for theorem-proving models, with **frozen targets*
 proof verification, and reproducible run records.
 The benchmark compiles `Problem.Target` first. An answer imports that module,
 develops any helpers it needs, and exports `Submission.solution : Problem.Target`.
-A generated check module checks the type and audits the proof's axiom closure.
+A trusted Goal module freezes gold arguments before the answer is imported.
+A generated check module checks the resulting constant and audits its axiom closure.
 
 Only a successful kernel check **and** a clean axiom audit count as solved.
 Missing backends, unsupported module builds, and missing axiom listings never
@@ -36,7 +37,7 @@ end Problem
 
 ```lean
 -- The answer may freely organize definitions, lemmas and instances.
-import Bench.P001
+import FtpEvalBench.P001
 namespace Submission
 def value : Nat := 1
 theorem helper : value = 1 := rfl
@@ -83,7 +84,7 @@ with create("lean4", project_dir="/path/to/built-lean-project") as backend:
 ## Every stage is saved before the next one starts
 
 The run manifest and source inputs are saved before grading. Every answer emits
-running and terminal checkpoints for **interface → kernel → axioms**. An
+running and terminal checkpoints for **environment → interface → kernel → replay → dependencies → axioms → report**. An
 append-only event history and per-answer snapshots preserve progress across
 interruptions. Final answer records are saved before advancing to another answer.
 Aggregate reports are saved last.
@@ -95,8 +96,8 @@ See [run lifecycle and output format](docs/runs.md) and
 
 `ftp-eval audit --problems statements/` checks original formal statements for
 provenance, faithfulness to prose (with `--judge`), and health (with `--backend`).
-This is a separate API from grading frozen Target modules. Health probes expect
-the original theorem statement, rather than a `def Target` wrapper.
+Health probes compile frozen Target modules directly. A universal target probe
+checks whether every value is accepted. Failed tactic search is inconclusive.
 
 Judges: `mock` for tests and `claude` for API judging. Install the optional SDK with
 `pip install -e ".[judge]"`. A paid judge requires
@@ -111,6 +112,8 @@ ftp-eval doctor -b lean4 -o project_dir=/path/to/project
 ```
 
 `lean4` supports isolated multi-module builds with fresh Lean processes.
+`lean4-docker` adds Linux isolation, exact environment preflight and fresh kernel
+replay; see [container workers](docs/container-workers.md).
 `mock` and the generic `axle` HTTP adapter support the lower-level verifier API,
 but do not provide multi-module grading unless a backend implements that capability.
 See [adding a backend](docs/adding-a-backend.md).
@@ -137,7 +140,7 @@ analysis and grading overhead; it does not benchmark real Lean compilation.
 
 - `src/ftp_eval/`: library and CLI; [architecture](ARCHITECTURE.md).
 - `benchmarks/`: problem modules and grouped submission fixtures.
-- `examples/`: the standalone three-module interface example.
+- `examples/`: a frozen-target interface example with a trusted gold Goal.
 - `tests/`: regression tests.
 - `scripts/`: development utilities.
 - `docs/`: backend, soundness, metrics and run references.

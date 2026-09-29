@@ -4,14 +4,22 @@ from enum import Enum
 __all__ = ["StageId", "StageStatus"]
 
 class StageId(str, Enum):
+    ENVIRONMENT = "environment"
     INTERFACE = "interface"
     KERNEL = "kernel"
+    REPLAY = "replay"
+    DEPENDENCIES = "dependencies"
     AXIOMS = "axioms"
     REPORT = "report"
 
     @property
     def number(self) -> int:
-        return {"interface": 1, "kernel": 2, "axioms": 3, "report": 4}[self.value]
+        return {"environment": 0, "interface": 1, "kernel": 2, "replay": 3,
+                "dependencies": 4, "axioms": 5, "report": 6}[self.value]
+
+    @property
+    def directory(self) -> str:
+        return "%d-%s" % (self.number, self.value)
 
 class StageStatus(str, Enum):
     PASSED = "passed"

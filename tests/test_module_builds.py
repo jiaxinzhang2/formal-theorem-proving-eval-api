@@ -10,7 +10,7 @@ from ftp_eval.backends.types import BackendInfo, ModuleBuild, ModuleSource, Stat
 def backend(tmp_path, monkeypatch):
     verifier = Lean4Verifier(project_dir=tmp_path)
     monkeypatch.setattr(verifier, "info", lambda: BackendInfo("lean4", "lean4", True))
-    monkeypatch.setattr(verifier, "supports_module_builds", lambda: True)
+    monkeypatch.setattr(verifier, "supports_module_builds", lambda **kwargs: True)
     return verifier
 
 def test_identical_answers_use_unique_build_directories(tmp_path, monkeypatch):
@@ -56,6 +56,62 @@ def test_audit_subprocess_failure_is_not_verified(tmp_path, monkeypatch):
     result = verifier._audit_last(ModuleSource("Check", "#print axioms missing"), tmp_path, [], "missing", 1.0)
     assert not result.verified
     assert result.status is Status.FAILED
+
+
+def test_replay_failure_stops_before_dependency_extraction(tmp_path, monkeypatch):
+    verifier = backend(tmp_path, monkeypatch)
+    verifier.recheck = True
+    monkeypatch.setattr(verifier, "_build_one", lambda *args: None)
+    monkeypatch.setattr(verifier, "_replay_last", lambda *args: ModuleBuild(Status.FAILED))
+    monkeypatch.setattr(verifier, "_audit_last", lambda *args: pytest.fail("must not audit a failed replay"))
+    events = []
+    result = verifier.build_modules([ModuleSource("Check", "theorem target : True := trivial")],
+                                    audit_declaration="target", on_stage=lambda stage, event: events.append((stage, event["status"])))
+    assert result.raw["failed_stage"] == "replay"
+    assert events == [("kernel", "passed"), ("replay", "running"), ("replay", "failed")]
+
+
+def test_goal_cache_tracks_trusted_problem_source(tmp_path, monkeypatch):
+    verifier = backend(tmp_path, monkeypatch)
+    goal_homes = []
+    def build(module, home, *args):
+        path = home / Path(*module.path_parts).with_suffix(".olean")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"compiled")
+        if module.module == "Goal":
+            goal_homes.append(home)
+        return None
+    monkeypatch.setattr(verifier, "_build_one", build)
+    for value in ("1", "2"):
+        verifier.build_modules([ModuleSource("Problem", "def n := " + value, cacheable=True),
+                                ModuleSource("Goal", "import Problem\ndef goal := n", cacheable=True)])
+    assert goal_homes[0] != goal_homes[1]
+
+
+def test_capability_probe_uses_real_prefix_and_nested_module_shape(tmp_path, monkeypatch):
+    verifier = Lean4Verifier(project_dir=tmp_path)
+    monkeypatch.setattr(verifier, "info", lambda: BackendInfo("lean4", "lean4", True))
+    modules = []
+    monkeypatch.setattr(verifier, "_build_one", lambda module, *args: modules.append(module) or None)
+    assert verifier.supports_module_builds(module_prefix="ActualPrefix")
+    assert len(modules[0].path_parts) == 2
+    assert len(modules[1].path_parts) == 3
+    assert modules[0].path_parts[0] == "ActualPrefix"
+    assert modules[1].source.startswith("import " + modules[0].module)
+
+
+def test_capability_never_probes_an_unavailable_backend(tmp_path, monkeypatch):
+    verifier = Lean4Verifier(project_dir=tmp_path)
+    monkeypatch.setattr(verifier, "info", lambda: BackendInfo("lean4", "lean4", False))
+    monkeypatch.setattr(verifier, "_build_one", lambda *args: pytest.fail("unavailable toolchain"))
+    assert not verifier.supports_module_builds()
+
+
+def test_generated_module_prefix_cannot_collide_with_project_library(tmp_path):
+    (tmp_path / "lakefile.toml").write_text('name = "project"\n[[lean_lib]]\nname = "Bench"\n')
+    verifier = Lean4Verifier(project_dir=tmp_path)
+    with pytest.raises(RuntimeError, match="conflicts.*lean_lib"):
+        verifier.preflight_modules([ModuleSource("Bench.P001", "def x := 1")])
 
 @pytest.mark.parametrize("name", ["../outside", ".", "A..B", "A/B", "C:\\unsafe"])
 def test_module_names_cannot_escape_build_root(name):

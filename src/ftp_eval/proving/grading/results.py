@@ -23,6 +23,9 @@ class GradedAnswer(InterfaceVerdict):
 
     @property
     def compile_status(self) -> StageStatus:
+        for event in reversed(self.stages):
+            if event["stage"] == "kernel" and event["status"] != "running":
+                return StageStatus(event["status"])
         if self.build is None or self.build.status in (Status.ERROR, Status.SKIPPED):
             return StageStatus.NOT_RUN
         return StageStatus.PASSED if self.build.verified else StageStatus.FAILED
@@ -35,6 +38,9 @@ class GradedAnswer(InterfaceVerdict):
 
     @property
     def stage_reached(self) -> Stage:
+        reached = [Stage(e["stage"]) for e in self.stages if e["status"] != "not_run"]
+        if reached:
+            return max(reached, key=lambda s: s.number)
         if self.axiom_audit is not None:
             return Stage.AXIOMS
         if self.build is not None:

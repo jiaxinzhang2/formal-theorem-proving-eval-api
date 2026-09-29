@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import abc
 import time
-from typing import Any, Mapping, Sequence
+from typing import Any, Callable, Mapping, Sequence
 
 from .soundness import screen_source
 from .types import (
@@ -300,6 +300,7 @@ class Verifier(abc.ABC):
         *,
         audit_declaration: str = "",
         timeout_s: float = 300.0,
+        on_stage: Callable[[str, Mapping[str, Any]], None] | None = None,
     ) -> "ModuleBuild | None":
         """Compile several modules in order, each able to import the last.
 
@@ -316,6 +317,16 @@ class Verifier(abc.ABC):
         Implemented by :class:`~ftp_eval.backends.lean4.Lean4Verifier`.
         """
         return None
+
+    def verify_attempt(
+        self, task: ProofTask, attempt: ProofAttempt, *, timeout_s: float = 300.0
+    ) -> VerificationResult:
+        """Check a proof attempt; this is not a frozen benchmark verdict.
+
+        ``verify`` remains available for existing callers. Final benchmark
+        acceptance is determined by ``evaluate_submission`` / ``evaluate_benchmark``.
+        """
+        return self.verify(task, attempt, timeout_s=timeout_s)
 
     def build_probe(self, task: StatementTask, kind: ProbeKind) -> str | None:
         """Build a source file that asks the prover one thing about a statement.

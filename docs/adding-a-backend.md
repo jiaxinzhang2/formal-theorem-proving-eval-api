@@ -145,7 +145,13 @@ apart is worse than one that says it is broken.
 
 ## Frozen benchmark grading
 
-Implement `build_modules(modules, audit_declaration=..., timeout_s=...)` for grading.
+Implement `supports_module_builds()` and
+`build_modules(modules, audit_declaration=..., timeout_s=..., on_stage=...)` for grading.
+The capability probe must compile one module and import it from another; official
+preflight refuses a backend that cannot demonstrate this. For Lean, probe the
+actual generated roots and nested module shape, and refuse roots that collide
+with project libraries. Report compile, replay
+and dependency-extraction checkpoints through `on_stage` as work completes.
 Compile modules in order, in a fresh answer-specific build directory and fresh
 processes. Only trusted modules marked `cacheable` may be reused. Return ModuleBuild
 with the kernel status and the requested declaration's axiom closure. A missing

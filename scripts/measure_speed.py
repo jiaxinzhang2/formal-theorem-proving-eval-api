@@ -79,7 +79,7 @@ PROBLEM_TEMPLATE = (
     "-- %s\nnamespace Problem\ndef Target : Prop := (0 : Nat) <= 1\nend Problem\n"
 )
 ANSWER_TEMPLATE = (
-    "import Bench.%s\nnamespace Submission\n"
+    "import FtpEvalBench.%s\nnamespace Submission\n"
     "theorem solution : Problem.Target := by\n"
     "  have key : (0 : Nat) <= 1 := Nat.zero_le 1\n"
     "  exact key\nend Submission\n"
@@ -181,7 +181,7 @@ def build_cases() -> list[tuple[str, Callable[[], object], int]]:
         ("sample_duplication: 1000 samples", lambda: sample_duplication(samples), 10),
         (
             "check_interface: one answer",
-            lambda: check_interface(read_interface_problem(problem_src % "P001", module="Bench.P001"), answer_src % "P001"),
+            lambda: check_interface(read_interface_problem(problem_src % "P001", module="FtpEvalBench.P001"), answer_src % "P001"),
             20,
         ),
         (

@@ -35,6 +35,7 @@ Lean::
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 import re
 from dataclasses import dataclass, field
@@ -50,6 +51,7 @@ __all__ = [
     "load_benchmark_manifest",
     "observed_toolchain",
     "METADATA_KEYS",
+    "validate_environment",
 ]
 
 #: Keys recognized in a problem's metadata block. Unknown keys are kept in
@@ -195,7 +197,8 @@ class BenchmarkManifest:
             "version": self.version,
             "language": self.language,
             "description": self.description,
-            "declared_toolchain": {"lean": self.lean, "mathlib_rev": self.mathlib_rev},
+            "declared_toolchain": {**(self.raw.get("toolchain", {}) if isinstance(self.raw.get("toolchain", {}), dict) else {}),
+                                   "lean": self.lean, "mathlib_rev": self.mathlib_rev},
         }
 
 
@@ -255,6 +258,7 @@ def observed_toolchain(verifier: Any) -> dict[str, Any]:
     if project is not None:
         observed["project_dir"] = str(project)
         observed.update(_lean_project_versions(Path(project)))
+    observed.update(getattr(verifier, "environment_metadata", {}))
     return observed
 
 
@@ -274,7 +278,9 @@ def _lean_project_versions(project_dir: Path) -> dict[str, Any]:
     manifest = project_dir / "lake-manifest.json"
     if manifest.is_file():
         try:
-            data = json.loads(manifest.read_text(encoding="utf-8"))
+            manifest_bytes = manifest.read_bytes()
+            out["lake_manifest_sha256"] = hashlib.sha256(manifest_bytes).hexdigest()
+            data = json.loads(manifest_bytes)
         except (OSError, json.JSONDecodeError):
             return out
         for package in data.get("packages") or ():
@@ -282,6 +288,46 @@ def _lean_project_versions(project_dir: Path) -> dict[str, Any]:
                 out["mathlib_rev"] = package.get("rev") or package.get("inputRev") or ""
                 break
     return out
+
+
+def _lean_version(value: str) -> str:
+    match = re.search(r"(?<![\w.])v?(\d+\.\d+\.\d+(?:-rc\d+)?)(?![\w.-])", value)
+    return match.group(1) if match else ""
+
+
+def validate_environment(declared: BenchmarkManifest, observed: Mapping[str, Any]) -> list[str]:
+    """Exact, fail-closed preflight for official evaluation; no prefix revision matches."""
+    errors = []
+    if not observed.get("available"):
+        errors.append("verification backend unavailable")
+    expected_lean = _lean_version(declared.lean)
+    if not re.fullmatch(r"(?:leanprover/lean4:)?v?\d+\.\d+\.\d+(?:-rc\d+)?", declared.lean):
+        errors.append("toolchain.lean must pin an exact Lean release")
+    actual_lean = _lean_version(str(observed.get("version") or ""))
+    if not actual_lean or actual_lean != expected_lean:
+        errors.append("running Lean version does not match the declared release")
+    project_lean = _lean_version(str(observed.get("lean_toolchain") or ""))
+    if not project_lean or project_lean != expected_lean:
+        errors.append("project lean-toolchain is missing or mismatched")
+    actual_rev = str(observed.get("mathlib_rev") or "")
+    if declared.mathlib_rev or actual_rev:
+        if not re.fullmatch(r"[0-9a-fA-F]{40}", declared.mathlib_rev):
+            errors.append("toolchain.mathlib_rev must be a full commit SHA")
+        if not actual_rev or actual_rev.lower() != declared.mathlib_rev.lower():
+            errors.append("Mathlib revision is missing or mismatched")
+    toolchain = declared.raw.get("toolchain", {})
+    if not isinstance(toolchain, dict):
+        errors.append("toolchain must be an object")
+        return errors
+    expected_manifest = str(toolchain.get("lake_manifest_sha256") or "")
+    if not re.fullmatch(r"[0-9a-f]{64}", expected_manifest):
+        errors.append("toolchain.lake_manifest_sha256 must pin the complete dependency manifest")
+    if observed.get("lake_manifest_sha256") != expected_manifest:
+        errors.append("dependency manifest is missing or mismatched")
+    if observed.get("image_digest"):
+        if toolchain.get("image_digest") != observed["image_digest"]:
+            errors.append("toolchain.image_digest must match the worker's immutable image")
+    return errors
 
 
 def reconcile_toolchain(

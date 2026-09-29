@@ -1,5 +1,6 @@
 """Frozen benchmark grading and durable stage checkpoints."""
 import json
+from ftp_eval.spec.stage import StageId
 
 import pytest
 
@@ -20,7 +21,7 @@ namespace Problem
 def Target : Prop := True
 end Problem
 """
-GOOD = """import Bench.P001
+GOOD = """import FtpEvalBench.P001
 namespace Submission
 def helper : Nat := 1
 lemma supporting : True := by trivial
@@ -89,7 +90,7 @@ def test_helpers_need_no_matching_declaration():
 
 def test_import_and_axiom_policies_are_enforced():
     manifest = BenchmarkManifest(raw={"policy": {"allowed_imports": [], "allowed_axioms": []}})
-    answer = GOOD.replace("import Bench.P001", "import Bench.P001\nimport Mathlib")
+    answer = GOOD.replace("import FtpEvalBench.P001", "import FtpEvalBench.P001\nimport Mathlib")
     backend = RecordingBackend()
     result = grade_contest(ProblemSet({"P001": PROBLEM}, manifest=manifest), [Submission("a", {"P001": answer})], verifier=backend)
     assert result.grades()[0].failed_at is Stage.INTERFACE
@@ -108,7 +109,10 @@ def test_gold_arguments_are_checked_by_kernel_not_strings():
     backend = RecordingBackend()
     result = grade_contest(ProblemSet({"P001": problem}, manifest=manifest), [Submission("a", {"P001": answer})], verifier=backend)
     assert result.grades()[0].against_gold
-    assert "Problem.Target (1)" in backend.calls[0][0][2].source
+    modules = backend.calls[0][0]
+    assert "Problem.Target (1)" in modules[1].source and modules[1].cacheable
+    assert "Submission.solution" in modules[-1].source
+    assert "Problem.Target (1)" not in modules[-1].source
 
 def test_old_problem_format_is_not_silently_accepted():
     with pytest.raises(ValueError, match="Problem.Target"):
@@ -142,9 +146,9 @@ def test_backend_error_does_not_abort_other_answers():
 
 @pytest.mark.parametrize("relative", [
     "run.json", "events.jsonl", "problems.json", "problems.tsv", "summary.json",
-    "leaderboard.tsv", "1-interface/all.jsonl", "1-interface/refused.jsonl",
-    "2-kernel/all.jsonl", "3-axioms/all.jsonl", "4-report/by-problem.tsv",
-    "answers/alice/P001.json", "1-interface/by-answer/alice/P001.json",
+    "leaderboard.tsv", StageId.INTERFACE.directory + "/all.jsonl", StageId.INTERFACE.directory + "/refused.jsonl",
+    StageId.KERNEL.directory + "/all.jsonl", StageId.AXIOMS.directory + "/all.jsonl", StageId.REPORT.directory + "/by-problem.tsv",
+    "answers/alice/P001.json", StageId.INTERFACE.directory + "/by-answer/alice/P001.json",
 ])
 def test_run_records_every_stage(benchmark, tmp_path, relative):
     result = grade_contest(*load(benchmark), verifier=RecordingBackend(), output_dir=tmp_path / "runs", run_id="r")
@@ -154,17 +158,17 @@ def test_checkpoints_exist_before_backend_call(tmp_path):
     run = tmp_path / "runs/r"
     def inspect():
         assert json.loads((run / "run.json").read_text())["status"] == "running"
-        assert json.loads((run / "1-interface/by-answer/alice/P001.json").read_text())["status"] == "passed"
-        assert json.loads((run / "2-kernel/by-answer/alice/P001.json").read_text())["status"] == "running"
-        assert len(list((run / "2-kernel/modules/alice/P001").rglob("*.lean"))) == 3
+        assert json.loads((run / StageId.INTERFACE.directory / "by-answer/alice/P001.json").read_text())["status"] == "passed"
+        assert json.loads((run / StageId.KERNEL.directory / "by-answer/alice/P001.json").read_text())["status"] == "running"
+        assert len(list((run / StageId.KERNEL.directory / "modules/alice/P001").rglob("*.lean"))) == 3
     result = one(RecordingBackend(hook=inspect), output_dir=tmp_path / "runs", run_id="r")
     assert result.grades()[0].solved
     manifest = json.loads((run / "run.json").read_text())
-    assert manifest["status"] == "complete" and manifest["schema_version"] == 2
+    assert manifest["status"] == "complete" and manifest["schema_version"] == 3
     stages = [json.loads(line) for line in (run / "events.jsonl").read_text().splitlines()]
-    assert [(e["stage"], e["status"]) for e in stages if e["stage"] not in ("benchmark", "report")] == [
+    assert [(e["stage"], e["status"]) for e in stages if e["stage"] not in ("benchmark", "environment", "report")] == [
         ("interface", "running"), ("interface", "passed"),
-        ("kernel", "running"), ("kernel", "passed"), ("axioms", "running"), ("axioms", "passed")]
+        ("kernel", "running"), ("kernel", "passed"), ("replay", "not_run"), ("dependencies", "not_run"), ("axioms", "running"), ("axioms", "passed")]
 
 def test_interruption_keeps_completed_answers_and_current_stage(tmp_path):
     backend = RecordingBackend()
@@ -177,7 +181,7 @@ def test_interruption_keeps_completed_answers_and_current_stage(tmp_path):
     run = tmp_path / "r"
     assert json.loads((run / "run.json").read_text())["status"] == "interrupted"
     assert json.loads((run / "answers/a/P001.json").read_text())["solved"]
-    assert json.loads((run / "2-kernel/by-answer/b/P001.json").read_text())["status"] == "running"
+    assert json.loads((run / StageId.KERNEL.directory / "by-answer/b/P001.json").read_text())["status"] == "running"
 
 def test_run_ids_cannot_overwrite_previous_results(tmp_path):
     one(output_dir=tmp_path, run_id="r")

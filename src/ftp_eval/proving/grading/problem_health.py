@@ -13,7 +13,8 @@ Each asks something a model cannot reliably answer, because each is really
                       elaborator setting that weakens the goal?   text only
     elaborates        does the statement typecheck at all?
     non_trivial       can `trivial` / `simp` / `decide` close it outright?
-    non_vacuous       is `False` derivable from the hypotheses?
+    non_vacuous       does the frozen target accept every possible value?
+                      (legacy theorems: contradiction in the hypotheses)
     gold_equivalent   is it provably iff a reference statement?
 
 Only the first needs no prover, so it runs even with no toolchain
@@ -40,8 +41,11 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Mapping, Sequence
 
-from ...backends.types import ProbeKind, StatementTask, Status
+from ...backends.types import ModuleSource, ProbeKind, StatementTask, Status
 from ...backends.soundness import STATEMENT_HACK_CLASSES, screen_source
+from ...backends.soundness import audit_axioms
+from ..interface import read_interface_problem
+from ..lean_file import parse_lean_file
 
 __all__ = [
     "HealthKind",
@@ -169,6 +173,8 @@ def check_problem_health(
     check_trivial: bool = True,
     check_vacuous: bool = True,
     check_gold: bool = True,
+    module: str = "",
+    gold_arguments: Sequence[str] = (),
 ) -> ProblemHealth:
     """Ask all five questions. Never raises.
 
@@ -181,6 +187,12 @@ def check_problem_health(
     raw: dict[str, Any] = {}
     # Free and deterministic, so it runs first and runs always.
     checks: list[HealthCheck] = [_assumes_nothing(task)]
+
+    if module or any(d.qualified_name == "Problem.Target"
+                     for d in parse_lean_file(task.formal_statement).declarations):
+        return _frozen_health(verifier, task, module or "FtpEvalBench." + task.task_id,
+                              gold_arguments, checks, started, timeout_s,
+                              check_trivial, check_vacuous, check_gold)
 
     if verifier is None:
         checks.extend(
@@ -331,7 +343,99 @@ def _vacuous(probe: Any) -> HealthCheck:
             "true and every answer to it proves nothing",
             fatal=True,
         )
-    return HealthCheck(HealthKind.NON_VACUOUS, True, "hypotheses are not contradictory")
+    return HealthCheck(HealthKind.NON_VACUOUS, None,
+                       "cheap tactics did not derive a contradiction; non-vacuity is not proved")
+
+
+def _frozen_health(
+    verifier: Any, task: StatementTask, module: str, gold: Sequence[str],
+    checks: list[HealthCheck], started: float, timeout: float,
+    trivial: bool, vacuous: bool, compare_gold: bool,
+) -> ProblemHealth:
+    """Probe the compiled target directly, including universal value acceptance."""
+    raw: dict[str, Any] = {}
+    probe_cache: dict[str, tuple[Status | None, Mapping[str, Any]]] = {}
+    try:
+        problem = read_interface_problem(task.formal_statement, problem_id=task.task_id,
+                                         module=module)
+    except ValueError as exc:
+        checks.append(HealthCheck(HealthKind.ELABORATES, False, str(exc), fatal=True))
+        return ProblemHealth(task.task_id, tuple(checks), time.monotonic() - started, raw)
+
+    def run(kind: HealthKind, goal: str | None) -> Status | None:
+        if verifier is None:
+            raw[kind.value] = {"reason": "no prover configured"}
+            return None
+        if goal is not None and goal in probe_cache:
+            status, saved = probe_cache[goal]
+            raw[kind.value] = {**saved, "reused_probe": True}
+            return status
+        modules = [ModuleSource(module, task.formal_statement, cacheable=True)]
+        declaration = ""
+        if goal is not None:
+            declaration = "ftp_health_probe"
+            source = ("import %s\n" % module + "theorem %s : %s := by\n" % (declaration, goal)
+                      + "  first | (intros; trivial) | (intros; decide) | (intros; simp [Problem.Target])\n"
+                      + "#print axioms %s\n" % declaration)
+            modules.append(ModuleSource(module + ".Health" + kind.name.title().replace("_", ""), source))
+        else:
+            source = task.formal_statement
+        try:
+            build = verifier.build_modules(modules, audit_declaration=declaration, timeout_s=timeout)
+            if build is None:
+                raw[kind.value] = {"reason": "backend cannot execute frozen-target module probes", "source": source}
+                return None
+            raw[kind.value] = {"source": source, "build": build.to_dict()}
+            if build.verified and declaration and not audit_axioms(build.axioms).ok:
+                raw[kind.value]["reason"] = "probe proof did not pass its axiom audit"
+                return Status.ERROR
+            if goal is not None and not build.verified and (
+                    build.failed_module == module or build.raw.get("failed_stage") in ("replay", "dependencies")):
+                raw[kind.value]["reason"] = "trusted module or verification infrastructure failed; tactic search was not evaluated"
+                return Status.ERROR
+            if goal is not None:
+                probe_cache[goal] = (build.status, raw[kind.value])
+            return build.status
+        except Exception as exc:
+            raw[kind.value] = {"reason": "module probe failed: %s" % exc, "source": source}
+            return Status.ERROR
+
+    elaboration = run(HealthKind.ELABORATES, None)
+    unavailable = elaboration is None or elaboration in (Status.ERROR, Status.SKIPPED, Status.TIMEOUT)
+    checks.append(HealthCheck(HealthKind.ELABORATES,
+                             None if unavailable else elaboration is Status.VERIFIED,
+                             str(raw.get(HealthKind.ELABORATES.value, {}).get("reason", "frozen module typecheck: %s" % elaboration)),
+                             fatal=not unavailable and elaboration is not Status.VERIFIED))
+    parameters = ["ftp_value_%d" % i for i in range(len(problem.target_parameters))]
+    # @ makes implicit parameters explicit too; Lean infers each quantified domain.
+    universal = "@Problem.Target " + " ".join(parameters)
+    if parameters:
+        universal = "∀ " + " ".join(parameters) + ", " + universal
+    for kind, enabled in ((HealthKind.NON_TRIVIAL, trivial), (HealthKind.NON_VACUOUS, vacuous)):
+        if not enabled:
+            continue
+        if kind is HealthKind.NON_VACUOUS and not parameters:
+            checks.append(HealthCheck(kind, None, "no value parameters; the universal value-acceptance probe does not apply"))
+            continue
+        if elaboration is not Status.VERIFIED:
+            checks.append(HealthCheck(kind, None, "not checked: " + checks[-1].detail))
+            continue
+        goal = universal
+        if kind is HealthKind.NON_TRIVIAL and gold and len(gold) == len(parameters):
+            goal = "@Problem.Target " + " ".join("(%s)" % value for value in gold)
+        outcome = run(kind, goal)
+        if outcome is Status.VERIFIED:
+            detail = ("every target value is accepted: a proof of " + universal
+                      if kind is HealthKind.NON_VACUOUS else "cheap tactics prove the target")
+            checks.append(HealthCheck(kind, False, detail, fatal=kind is HealthKind.NON_VACUOUS))
+        else:
+            reason = raw.get(kind.value, {}).get("reason")
+            checks.append(HealthCheck(kind, None, str(reason or
+                                      "cheap tactics found no proof; this does not establish non-triviality or non-vacuity")))
+    if compare_gold and task.gold_formal_statement:
+        checks.append(HealthCheck(HealthKind.GOLD_EQUIVALENT, None,
+                                 "frozen modules require a separate reference interface; legacy theorem equivalence probes are not applicable"))
+    return ProblemHealth(task.task_id, tuple(checks), time.monotonic() - started, raw)
 
 
 def _gold(probe: Any) -> HealthCheck:
@@ -404,4 +508,7 @@ def format_health_summary(results: Sequence[ProblemHealth]) -> str:
             "evidence that they are sound -- in particular nothing looked for a "
             "vacuously true statement." % len(unprobed)
         )
+        for result in unprobed[:10]:
+            reason = next((c.detail for c in result.checks if c.kind is HealthKind.ELABORATES), "no elaboration probe")
+            lines.append("    %s: %s" % (result.problem_id, reason))
     return "\n".join(lines)

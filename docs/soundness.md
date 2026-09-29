@@ -4,17 +4,28 @@ Frozen benchmark grading checks a compiled `Problem.Target` through `Submission.
 
 ## Frozen benchmark grading
 
-The problem module is trusted and compiled first. The generated check ascribes
-`Submission.solution` to `Problem.Target`, then audits the dependency closure.
+The problem module is trusted and compiled first. When gold values are supplied,
+a trusted Goal module elaborates those expressions before importing the answer.
+The generated check ascribes `Submission.solution` to that frozen constant, then
+audits the dependency closure. Open value problems without gold record only the
+answer's claimed value and do not establish equality to an organizer answer.
 The default axiom allowlist is `propext`, `Classical.choice` and `Quot.sound`.
 A missing listing is an audit failure. Interface screening enforces imports and
 namespace policy and rejects obvious placeholders, fresh axioms and kernel escapes.
+Answers must not add notation, infix/prefix/postfix declarations, syntax categories,
+macros, elaborators or `run_tac`. Attribute commands may target only Submission
+declarations. Local notation is also refused. `Lean` is excluded from the default
+direct import allowlist; organizer dependencies may still import it transitively.
+The stdout axiom parser requires an exact declaration name and exactly one
+matching listing; missing or duplicate listings fail closed.
 See [benchmark policy](../benchmarks/README.md) and [run records](runs.md).
 
 The source screen is conservative and syntactic; it is not a complete Lean
 parser. Verification trusts the selected Lean toolchain, allowed imports and
-benchmark environment. Fresh processes and separate build directories provide
-evaluation isolation, rather than an OS sandbox for arbitrary metaprograms.
+benchmark environment. Native execution provides process/build isolation. Docker
+execution adds read-only OS isolation and fresh built-in kernel replay. See
+[container workers](container-workers.md) for its boundaries; these checks do not
+establish immunity to every compiler or kernel vulnerability.
 
 ## Lower-level verifier screening
 
@@ -105,7 +116,10 @@ the report says so instead of implying the structural pass was enough.
 ### A statement is not screened for what a proof is screened for
 
 `screen_source` takes a `classes` argument, and the two callers pass
-different sets. An answer gets `PROOF_HACK_CLASSES`, which is everything.
+different sets. Frozen-target answers get `ANSWER_HACK_CLASSES`: placeholders, fresh axioms,
+kernel escapes, resource uncapping, elaboration tricks and lookalike identifiers.
+Statement tampering and definition shadowing are excluded because the target is
+already compiled. The lower-level proof API retains `PROOF_HACK_CLASSES`.
 A problem statement gets `STATEMENT_HACK_CLASSES`, which deliberately
 leaves out:
 

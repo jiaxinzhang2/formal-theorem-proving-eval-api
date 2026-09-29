@@ -27,10 +27,8 @@ class BenchmarkProblem:
     problem_id: str
     #: The complete Lean source the setter published.
     source: str
-    #: Fully-qualified name of the theorem under test, when it is known
-    #: ahead of grading. ``None`` lets stage ① infer it, which is safe for
-    #: the one-theorem-per-file convention.
-    target: str | None = None
+    #: Frozen target exported by the trusted problem module.
+    target: str | None = "Problem.Target"
     #: Provenance and classification. ``ProblemMetadata`` in practice; typed
     #: loosely here so the contract does not depend on the grading package.
     metadata: Any = None

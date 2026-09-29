@@ -20,6 +20,8 @@ class ProblemStatistics:
     solved: int = 0
     refused_at_interface: int = 0
     refused_at_kernel: int = 0
+    refused_at_replay: int = 0
+    refused_at_dependencies: int = 0
     refused_at_axioms: int = 0
     not_compiled: int = 0
 
@@ -39,6 +41,8 @@ class ProblemStatistics:
             "solve_rate": round(self.solve_rate, 4),
             "refused_at_interface": self.refused_at_interface,
             "refused_at_kernel": self.refused_at_kernel,
+            "refused_at_replay": self.refused_at_replay,
+            "refused_at_dependencies": self.refused_at_dependencies,
             "refused_at_axioms": self.refused_at_axioms,
             "not_compiled": self.not_compiled,
         }
@@ -177,6 +181,10 @@ def summarize_contest(
                 problem.refused_at_interface += 1
             elif failed_at is Stage.KERNEL:
                 problem.refused_at_kernel += 1
+            elif failed_at is Stage.REPLAY:
+                problem.refused_at_replay += 1
+            elif failed_at is Stage.DEPENDENCIES:
+                problem.refused_at_dependencies += 1
             elif failed_at is Stage.AXIOMS:
                 problem.refused_at_axioms += 1
 

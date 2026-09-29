@@ -148,7 +148,7 @@ class ModuleSource:
     propositions fixed -- before any answer exists.
     """
 
-    #: Dotted name, e.g. ``Bench.P001``. What an importer writes.
+    #: Dotted name, e.g. ``FtpEvalBench.P001``. What an importer writes.
     module: str
     source: str
     #: Safe to build once and reuse across answers. True only for trusted

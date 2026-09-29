@@ -50,7 +50,7 @@ end Problem
 """
 
 ANSWER = """\
-import Bench.P001
+import FtpEvalBench.P001
 
 namespace Submission
 
@@ -68,8 +68,8 @@ end Submission
 
 
 def problem(gold: tuple[str, ...] = ()) -> InterfaceProblem:
-    read = read_interface_problem(PROBLEM, problem_id="P001", module="Bench.P001")
-    return InterfaceProblem("P001", "Bench.P001", read.target_parameters, gold)
+    read = read_interface_problem(PROBLEM, problem_id="P001", module="FtpEvalBench.P001")
+    return InterfaceProblem("P001", "FtpEvalBench.P001", read.target_parameters, gold)
 
 
 def faults(report) -> set[str]:
@@ -80,7 +80,7 @@ def faults(report) -> set[str]:
 
 
 def test_the_targets_parameters_are_read_not_guessed():
-    read = read_interface_problem(PROBLEM, problem_id="P001", module="Bench.P001")
+    read = read_interface_problem(PROBLEM, problem_id="P001", module="FtpEvalBench.P001")
     assert read.target == "Problem.Target"
     assert read.target_parameters == ("a0",)
     assert read.wants_value
@@ -91,7 +91,7 @@ def test_a_plain_prove_this_target_takes_no_value():
         "def Target (a0 : Nat) : Prop :=\n  IsLeast { n | Good n } a0",
         "def Target : Prop :=\n  ∀ n : Nat, Good n → 0 < n",
     )
-    read = read_interface_problem(source, problem_id="P002", module="Bench.P002")
+    read = read_interface_problem(source, problem_id="P002", module="FtpEvalBench.P002")
     assert read.target_parameters == ()
     assert not read.wants_value
 
@@ -173,7 +173,7 @@ def test_an_unlisted_import_is_refused():
     """A self-supplied module can carry its own axioms."""
     report = check_interface(
         problem(),
-        ANSWER.replace("import Bench.P001", "import Bench.P001\nimport MyOwnModule"),
+        ANSWER.replace("import FtpEvalBench.P001", "import FtpEvalBench.P001\nimport MyOwnModule"),
         allowed_imports=["Mathlib"],
     )
     assert InterfaceFault.IMPORT_NOT_ALLOWED.value in faults(report)
@@ -199,7 +199,11 @@ def test_the_check_is_built_against_the_gold_value_when_there_is_one():
     assert report.submitted_arguments == ("1",)
     arguments, against_gold = check_arguments(with_gold, report)
     assert arguments == ("4",) and against_gold
-    assert "Problem.Target (4)" in build_check_source(with_gold, "Bench.Sub.a", arguments)
+    from ftp_eval.proving.interface import build_goal_module
+    assert "Problem.Target (4)" in build_goal_module(with_gold).source
+    check = build_check_source(with_gold, "FtpEvalBench.Sub.a", arguments)
+    assert "import FtpEvalBench.P001.Goal" in check
+    assert "Problem.Target (4)" not in check
 
 
 def test_without_a_gold_value_the_answers_own_claim_is_used_and_flagged():
@@ -215,9 +219,9 @@ def test_without_a_gold_value_the_answers_own_claim_is_used_and_flagged():
 
 
 def test_the_check_module_cites_the_solution_and_audits_it():
-    source = build_check_source(problem(), "Bench.Sub.alice", ("4",))
-    assert "import Bench.P001" in source
-    assert "import Bench.Sub.alice" in source
+    source = build_check_source(problem(), "FtpEvalBench.Sub.alice", ("4",))
+    assert "import FtpEvalBench.P001" in source
+    assert "import FtpEvalBench.Sub.alice" in source
     assert "%s.%s" % (SUBMISSION_NAMESPACE, SOLUTION_NAME) in source
     assert "#print axioms %s" % CHECK_THEOREM in source
     # It cites one constant. The answer's text is never re-elaborated here.
@@ -294,13 +298,13 @@ def test_only_the_problem_module_is_cacheable():
     The problem is identical for everyone and trusted, so caching it is both
     safe and where the time goes. An answer is neither.
     """
-    assert ModuleSource("Bench.P001", "x", cacheable=True).cacheable
-    assert not ModuleSource("Bench.Sub.alice", "x").cacheable
+    assert ModuleSource("FtpEvalBench.P001", "x", cacheable=True).cacheable
+    assert not ModuleSource("FtpEvalBench.Sub.alice", "x").cacheable
     assert ContestPolicy().isolate_builds
 
 
 def test_a_module_name_maps_to_a_path():
-    assert ModuleSource("Bench.Sub.alice", "x").path_parts == ("Bench", "Sub", "alice")
+    assert ModuleSource("FtpEvalBench.Sub.alice", "x").path_parts == ("FtpEvalBench", "Sub", "alice")
 
 
 def test_the_mock_backend_reports_no_module_support():

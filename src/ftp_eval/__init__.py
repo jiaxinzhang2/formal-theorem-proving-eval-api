@@ -27,13 +27,14 @@ from .proving.grading import (
     StageStatus,
     Submission,
     grade_contest,
+    evaluate_benchmark,
     load_problem_set,
     load_submissions,
 )
 from .proving.lean_file import LeanDeclaration, LeanFile, parse_lean_file
 from .proving.interface import (
     ContestPolicy, InterfaceFault, InterfaceProblem, InterfaceReport,
-    InterfaceVerdict, grade_interface, read_interface_problem, check_interface,
+    InterfaceVerdict, grade_interface, evaluate_submission, read_interface_problem, check_interface,
     build_check_source,
 )
 from .backends.types import ModuleBuild, ModuleSource
@@ -75,7 +76,7 @@ from .autoformalization.types import Check, CheckKind, JudgeLabel, JudgeUsage, J
 __all__ = [
     "__version__",
     "ContestPolicy", "InterfaceFault", "InterfaceProblem", "InterfaceReport",
-    "InterfaceVerdict", "grade_interface", "read_interface_problem", "check_interface",
+    "InterfaceVerdict", "grade_interface", "evaluate_submission", "read_interface_problem", "check_interface",
     "build_check_source", "ModuleBuild", "ModuleSource",
     # -- proving: does this answer prove this theorem? ------------------
     "parse_lean_file",
@@ -89,6 +90,7 @@ __all__ = [
     "screen_soundness",
     # -- grading a benchmark -------------------------------------------
     "grade_contest",
+    "evaluate_benchmark",
     "load_problem_set",
     "load_submissions",
     "ProblemSet",

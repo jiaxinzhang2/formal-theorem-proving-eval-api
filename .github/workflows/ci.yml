@@ -95,11 +95,20 @@ jobs:
             --out /tmp/grade-results --run-id ci --quiet | tee /tmp/grade.txt
           grep -q "kernel checks not run" /tmp/grade.txt
           grep -q "carol/P099.lean" /tmp/grade.txt
-          for f in run.json events.jsonl problems.json problems.tsv leaderboard.tsv \
-                   summary.json 1-interface/all.jsonl 1-interface/refused.jsonl \
-                   2-kernel/all.jsonl 3-axioms/all.jsonl 4-report/by-problem.tsv; do
-            test -f "/tmp/grade-results/ci/$f" || { echo "missing $f"; exit 1; }
-          done
+          python - <<'PY'
+          from pathlib import Path
+          from ftp_eval.spec.stage import StageId
+          root = Path('/tmp/grade-results/ci')
+          expected = ['run.json', 'events.jsonl', 'problems.json', 'problems.tsv',
+                      'leaderboard.tsv', 'summary.json',
+                      StageId.ENVIRONMENT.directory + '/stage.json',
+                      StageId.INTERFACE.directory + '/refused.jsonl',
+                      StageId.REPORT.directory + '/by-problem.tsv']
+          expected += [s.directory + '/all.jsonl' for s in StageId
+                       if s not in (StageId.ENVIRONMENT, StageId.REPORT)]
+          for name in expected:
+              assert (root / name).is_file(), name
+          PY
           if ftp-eval grade --problems benchmarks/demo-2026/problems \
                --submissions benchmarks/demo-2026/submissions --strict --quiet; then
             echo "unverified answers must never pass strict grading"

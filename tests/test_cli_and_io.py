@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from ftp_eval.spec.stage import StageId
+
 import json
 
 import pytest
@@ -26,7 +28,7 @@ def benchmark(tmp_path, monkeypatch):
 def Target : Prop := True
 end Problem
 """
-    answer = """import Bench.%s
+    answer = """import FtpEvalBench.%s
 namespace Submission
 theorem solution : Problem.Target := by
   %s
@@ -136,8 +138,8 @@ def test_cli_grade_end_to_end(benchmark, capsys):
     # layout promises.
     run = next(results.iterdir())
     assert (run / "run.json").exists()
-    assert (run / "1-interface" / "all.jsonl").exists()
-    assert (run / "4-report" / "by-problem.tsv").exists()
+    assert (run / StageId.INTERFACE.directory / "all.jsonl").exists()
+    assert (run / StageId.REPORT.directory / "by-problem.tsv").exists()
     assert (run / "leaderboard.tsv").exists()
 
 

@@ -8,7 +8,7 @@ how it succeeds, and most of the categories below are only interesting as
 the comparison between the two.
 
 The unit is one answer to one problem. `runs/<run-id>/answers/<who>/<problem>.json`
-carries the per-answer fields, `4-report/*.tsv` the aggregates, and
+carries the per-answer fields, `6-report/*.tsv` the aggregates, and
 `summary.json` the headline numbers.
 
 Where they come from: a backend reports only what the prover said, and
@@ -29,9 +29,9 @@ The headline numbers.
 `kernel_checked` | per answer | Whether a conclusive kernel result was obtained. Without this an answer cannot be solved |
 `stage_reached` / `stages` | per answer | Exactly where the answer ended up, so no result is of unclear provenance |
 `failed_at` | per answer | Which stage refused it, if one did |
-`by_problem` | `4-report/by-problem.tsv` | How many participants solved each problem. A problem nobody solved and a problem everybody solved are both worth a second look |
-`by_participant` | `4-report/by-participant.tsv` | The leaderboard, with the stage each loss happened at |
-`reasons` | `4-report/reasons.tsv` | Every distinct refusal reason, counted |
+`by_problem` | `6-report/by-problem.tsv` | How many participants solved each problem. A problem nobody solved and a problem everybody solved are both worth a second look |
+`by_participant` | `6-report/by-participant.tsv` | The leaderboard, with the stage each loss happened at |
+`reasons` | `6-report/reasons.tsv` | Every distinct refusal reason, counted |
 
 `NOT_RUN` is never folded into passed or failed: a stage that could not run
 is not evidence either way. Backend errors remain explicit `not_run` outcomes. They never count as solved;
@@ -62,8 +62,8 @@ reported separately because they have different fixes. Both come from
 |---|---|
 `assumes_nothing` | **Text only**, so it runs with no prover: the problem declares no `axiom` / `opaque` / `constant`, and sets no elaborator option that weakens the goal |
 `elaborates` | Prover: statement + placeholder body typechecks |
-`non_trivial` | Prover: a cheap tactic does *not* close it |
-`non_vacuous` | Prover: `False` is *not* derivable from the hypotheses |
+`non_trivial` | A successful cheap proof marks the target suspect; failed search is inconclusive |
+`non_vacuous` | A proof of `∀ values, Problem.Target values` marks a value problem ungradeable; failed search is inconclusive |
 `gold_equivalent` | Prover: `candidate ↔ reference` |
 
 `ungradeable` is set by a fatal failure — a statement that does not
@@ -80,6 +80,13 @@ Two flags, not one, because they mean different things:
 
 A report with `checked` true and `probed` false is not a clean bill of
 health, and `format_health_summary` says so in as many words.
+
+For frozen modules, `statement_*` metrics use the Target's binders and proposition
+body, excluding imports, helpers and the result sort `Prop`. Tactic-defined
+Target bodies are unsupported and these metrics are omitted. These are surface
+descriptors, not mathematical difficulty or proof-of-non-vacuity certificates.
+Legacy theorem probes remain available; frozen gold-reference equivalence requires
+a separate reference interface and currently reports not checked explicitly.
 
 ### 3b. Does it mean the right thing? — `autoformalization/`
 
@@ -153,7 +160,7 @@ metrics, `STATEMENT_METRIC_FIELDS` for statement ones. Passing none returns
 nothing rather than silently scanning a default that has drifted.
 
 Also aggregated for slicing: by problem, by participant, and by refusal
-reason (`4-report/*.tsv`).
+reason (`6-report/*.tsv`).
 
 **These are associations.** A metric can track success because it tracks
 task difficulty — `named_steps` correlating with failure may only mean

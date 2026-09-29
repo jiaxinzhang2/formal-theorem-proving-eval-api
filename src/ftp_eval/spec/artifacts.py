@@ -10,6 +10,7 @@ the numbers.
 from __future__ import annotations
 
 import abc
+from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 __all__ = ["ArtifactWriter"]
@@ -21,6 +22,31 @@ class ArtifactWriter(abc.ABC):
     Implemented by :class:`~ftp_eval.proving.grading.artifacts.RunDirectory`, which
     writes the folder layout documented in that module.
     """
+
+    @property
+    def directory(self) -> Path | None:
+        """Filesystem location when applicable; remote/in-memory writers return None."""
+        return None
+
+    @abc.abstractmethod
+    def write_inputs(self, problems: Mapping[str, str], submissions: Sequence[Any]) -> None:
+        """Freeze inputs before execution."""
+
+    @abc.abstractmethod
+    def write_modules(self, answer: Any) -> None:
+        """Record generated module sources before execution."""
+
+    @abc.abstractmethod
+    def write_stage(self, problem_id: str, participant: str, stage: str, event: Mapping[str, Any]) -> None:
+        """Persist one answer checkpoint before the next operation."""
+
+    @abc.abstractmethod
+    def write_run_stage(self, stage: str, status: str, payload: Any = None) -> None:
+        """Persist a run-level checkpoint."""
+
+    @abc.abstractmethod
+    def set_state(self, status: str, **fields: Any) -> None:
+        """Persist lifecycle state and run-level observations."""
 
     @abc.abstractmethod
     def write_manifest(

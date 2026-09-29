@@ -64,6 +64,7 @@ __all__ = [
     "HackClass",
     "STATEMENT_HACK_CLASSES",
     "PROOF_HACK_CLASSES",
+    "ANSWER_HACK_CLASSES",
     "HackPattern",
     "strip_comments",  # re-exported: callers of the screen usually want both
     "screen_source",
@@ -135,6 +136,12 @@ STATEMENT_HACK_CLASSES: tuple["HackClass", ...] = (
 
 #: Everything, which is what a submitted proof is screened for.
 PROOF_HACK_CLASSES: tuple["HackClass", ...] = tuple(HackClass)
+
+# Frozen-target submissions do not restate or redefine the trusted target.
+ANSWER_HACK_CLASSES: tuple[HackClass, ...] = tuple(
+    kind for kind in HackClass
+    if kind not in (HackClass.STATEMENT_TAMPERING, HackClass.DEFINITION_SHADOWING)
+)
 
 
 @dataclass(frozen=True)
@@ -587,7 +594,7 @@ _OPEN_RE = re.compile(r"^\s*(?:local\s+|scoped\s+)?open\s+([^\n]+)", re.MULTILIN
 
 #: Module prefixes a Lean 4 proof may import without comment. Anything
 #: else could be a module the model wrote, carrying its own axioms.
-DEFAULT_ALLOWED_IMPORTS: tuple[str, ...] = ("Mathlib", "Std", "Batteries", "Init", "Lean", "Aesop")
+DEFAULT_ALLOWED_IMPORTS: tuple[str, ...] = ("Mathlib", "Std", "Batteries", "Init", "Aesop")
 
 
 def _normalized_matches(pattern: HackPattern, body: str) -> Counter[str]:
