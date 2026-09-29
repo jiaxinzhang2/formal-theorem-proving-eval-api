@@ -16,6 +16,35 @@ check the problems themselves | `ftp-eval audit --problems …` |
 the format spec | [`../benchmarks/README.md`](../benchmarks/README.md) |
 a full benchmark | [`../benchmarks/demo-2026/`](../benchmarks/demo-2026/) |
 
+## [`frozen-target/`](frozen-target/) — the interface design
+
+Three files, and the whole grading story:
+
+```
+Problem.lean   sealed. Compiled BEFORE any answer exists, so once
+               `Problem.Target` is elaborated, nothing an answer declares
+               can change what it means.
+Answer.lean    imports it. May declare as much as it likes, in any shape.
+               One requirement: `Submission.solution : Problem.Target 1`.
+Check.lean     generated. Cites that one constant, states the type it must
+               have, and reads `#print axioms`.
+```
+
+Nothing compares statement text. An answer cannot redefine the problem's
+vocabulary (`Problem.Good` is already a compiled constant), cannot inject a
+`variable` into the target (the target has no binders left), and cannot
+restate the goal (it never states it — it cites it). A file-level
+`instance` is therefore *allowed*: it can only help prove the target, not
+change it.
+
+The value a problem asks for is a parameter of `Target`, so it lands in the
+answer's type and the **kernel** compares it against the gold — nothing has
+to decide whether `4` and `2 + 2` are the same string.
+
+`tests/test_interface.py` asserts the committed `Check.lean` is byte-equal
+(comments aside) to what the generator produces, so the example cannot
+drift away from the code.
+
 ## [`answer-verdicts/`](answer-verdicts/) — one problem, six answers
 
 ```bash

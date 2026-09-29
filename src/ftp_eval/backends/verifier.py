@@ -15,6 +15,8 @@ from typing import Any, Mapping, Sequence
 
 from .soundness import screen_source
 from .types import (
+    ModuleBuild,
+    ModuleSource,
     Assembly,
     BackendInfo,
     Diagnostic,
@@ -291,6 +293,29 @@ class Verifier(abc.ABC):
         )
 
     # -- statement probes ---------------------------------------------
+
+    def build_modules(
+        self,
+        modules: "Sequence[ModuleSource]",
+        *,
+        audit_declaration: str = "",
+        timeout_s: float = 300.0,
+    ) -> "ModuleBuild | None":
+        """Compile several modules in order, each able to import the last.
+
+        Return ``None`` when this backend cannot do it. That is not a
+        failure -- it is "did not run", and a caller must report it as such
+        rather than as a pass or a rejection.
+
+        The ordering is what makes a sealed problem possible: the first
+        module is elaborated before the later ones exist, so nothing they
+        declare can change what its propositions mean. ``audit_declaration``
+        names the constant whose ``#print axioms`` listing to read back,
+        because a term can have the right type and still not be a proof.
+
+        Implemented by :class:`~ftp_eval.backends.lean4.Lean4Verifier`.
+        """
+        return None
 
     def build_probe(self, task: StatementTask, kind: ProbeKind) -> str | None:
         """Build a source file that asks the prover one thing about a statement.

@@ -15,15 +15,18 @@ from __future__ import annotations
 
 import os
 import re
+import hashlib
 import shutil
 import subprocess
 import tempfile
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Iterable, Sequence
 
 from .types import (
+    ModuleBuild,
+    ModuleSource,
     BackendInfo,
     Diagnostic,
     ErrorKind,
@@ -539,6 +542,221 @@ class Lean4Verifier(Verifier):
         return path, cleanup
 
     # -- statement probes ---------------------------------------------
+
+
+    # -- ordered multi-module builds ------------------------------------
+
+    #: Probed once, then remembered: None = not asked yet.
+    _modules_supported: bool | None = None
+
+    def build_modules(
+        self,
+        modules: Sequence[ModuleSource],
+        *,
+        audit_declaration: str = "",
+        timeout_s: float = 300.0,
+    ) -> ModuleBuild | None:
+        """Compile modules in order, each able to import the ones before it.
+
+        Returns ``None`` when this toolchain cannot do it -- see
+        :meth:`supports_module_builds`. ``None`` is "did not run": the caller
+        must not read it as either verdict.
+        """
+        info = self.info()
+        if not info.available:
+            raise BackendUnavailable(info.detail or "lean4 backend unavailable")
+        if not modules:
+            return None
+        if not self.supports_module_builds():
+            return None
+        assert self.project_dir is not None
+
+        run_id = hashlib.sha256(
+            "\u0000".join(m.module + m.source for m in modules).encode("utf-8")
+        ).hexdigest()[:16]
+        root = self.project_dir / ".ftp_eval_build"
+        cache_root = root / "cache"
+        # Per-build directory, never shared. This is the isolation: two
+        # answers to the same problem cannot see each other's artifacts,
+        # because neither directory is on the other's search path.
+        run_root = root / "run" / run_id
+        started = time.monotonic()
+        search: list[Path] = []
+        reused = False
+        try:
+            for module in modules:
+                if module.cacheable:
+                    digest = hashlib.sha256(module.source.encode("utf-8")).hexdigest()[:24]
+                    home = cache_root / digest
+                    olean = home / Path(*module.path_parts).with_suffix(".olean")
+                    if home not in search:
+                        search.append(home)
+                    if olean.exists():
+                        # Keyed by content, so a hit is the same source, not
+                        # merely the same name.
+                        reused = True
+                        continue
+                else:
+                    home = run_root
+                    if home not in search:
+                        search.append(home)
+
+                outcome = self._build_one(module, home, search, timeout_s)
+                if outcome is not None:
+                    outcome.compile_time_s = time.monotonic() - started
+                    outcome.reused_cache = reused
+                    return outcome
+
+            audited = self._audit_last(
+                modules[-1], run_root if not modules[-1].cacheable else cache_root,
+                search, audit_declaration, timeout_s,
+            )
+            audited.compile_time_s = time.monotonic() - started
+            audited.reused_cache = reused
+            return audited
+        finally:
+            if not self.keep_sources:
+                shutil.rmtree(run_root, ignore_errors=True)
+
+    def supports_module_builds(self) -> bool:
+        """Whether an inherited LEAN_PATH actually reaches ``lake env lean``.
+
+        Probed rather than assumed, with a throwaway pair: a module declaring
+        one constant, and a second importing it. If the import does not
+        resolve, multi-module grading is unavailable on this toolchain and
+        says so, instead of reporting every answer as failing to compile.
+        """
+        if self._modules_supported is not None:
+            return self._modules_supported
+        if self.project_dir is None:
+            self._modules_supported = False
+            return False
+        probe_root = self.project_dir / ".ftp_eval_build" / "probe"
+        try:
+            base = ModuleSource("FtpEvalProbeBase", "def ftpEvalProbe : Nat := 1\n")
+            top = ModuleSource(
+                "FtpEvalProbeTop",
+                "import FtpEvalProbeBase\n\nexample : ftpEvalProbe = 1 := rfl\n",
+            )
+            failed = self._build_one(base, probe_root, [probe_root], 120.0)
+            if failed is None:
+                failed = self._build_one(top, probe_root, [probe_root], 120.0)
+            self._modules_supported = failed is None
+        except Exception:  # pragma: no cover - a broken toolchain is "no"
+            self._modules_supported = False
+        finally:
+            shutil.rmtree(probe_root, ignore_errors=True)
+        return bool(self._modules_supported)
+
+    def _build_one(
+        self,
+        module: ModuleSource,
+        home: Path,
+        search: Sequence[Path],
+        timeout_s: float,
+    ) -> ModuleBuild | None:
+        """Compile one module into ``home``. None means it compiled cleanly."""
+        path = home / Path(*module.path_parts).with_suffix(".lean")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(self._with_options(module.source), encoding="utf-8", newline="\n")
+        olean = path.with_suffix(".olean")
+
+        proc = self._run_lean([str(path), "-o", str(olean)], search, timeout_s)
+        if proc is None:
+            return ModuleBuild(
+                Status.TIMEOUT,
+                failed_module=module.module,
+                error_kind=ErrorKind.TIMEOUT,
+                diagnostics=(
+                    Diagnostic(
+                        Severity.ERROR,
+                        "building %s exceeded %.0fs" % (module.module, timeout_s),
+                        kind=ErrorKind.TIMEOUT,
+                    ),
+                ),
+            )
+        log = (proc.stdout or "") + ("\n" + proc.stderr if proc.stderr else "")
+        diagnostics = tuple(parse_lean_log(log))
+        errors = [d for d in diagnostics if d.severity is Severity.ERROR]
+        if proc.returncode != 0 or errors:
+            return ModuleBuild(
+                Status.FAILED,
+                failed_module=module.module,
+                diagnostics=diagnostics,
+                error_kind=errors[0].kind if errors else ErrorKind.UNKNOWN,
+                raw={"exit_code": proc.returncode, "log": log[-4000:]},
+            )
+        return None
+
+    def _audit_last(
+        self,
+        module: ModuleSource,
+        home: Path,
+        search: Sequence[Path],
+        declaration: str,
+        timeout_s: float,
+    ) -> ModuleBuild:
+        """Re-run the final module to read its ``#print axioms`` listing.
+
+        A separate run because the listing goes to stdout, and the build that
+        produced the ``.olean`` may have been served from cache. Without a
+        listing ``axioms`` stays ``None``, which upstream reads as "the audit
+        did not run" -- never as "no axioms".
+        """
+        if not declaration:
+            return ModuleBuild(Status.VERIFIED, axioms=None)
+        path = home / Path(*module.path_parts).with_suffix(".lean")
+        if not path.exists():
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(self._with_options(module.source), encoding="utf-8", newline="\n")
+        proc = self._run_lean([str(path)], search, timeout_s)
+        if proc is None:
+            return ModuleBuild(
+                Status.TIMEOUT, failed_module=module.module, error_kind=ErrorKind.TIMEOUT
+            )
+        log = (proc.stdout or "") + ("\n" + proc.stderr if proc.stderr else "")
+        listing = parse_printed_axioms(log, declaration)
+        return ModuleBuild(
+            Status.VERIFIED,
+            axioms=None if listing is None else tuple(listing),
+            diagnostics=tuple(parse_lean_log(log)),
+            raw={"log": log[-4000:]},
+        )
+
+    def _run_lean(
+        self, arguments: Sequence[str], search: Sequence[Path], timeout_s: float
+    ) -> Any:
+        """``lake env lean`` with the build directories on LEAN_PATH.
+
+        ``lake env`` adds the project's own paths; the inherited LEAN_PATH is
+        how the staged modules get found. Whether that inheritance works is
+        exactly what :meth:`supports_module_builds` probes, so this method
+        never has to assume it.
+        """
+        assert self.project_dir is not None
+        cmd = [self._lake_path(), "env", "lean"]
+        if self.memory_mb:
+            cmd.append("--memory=%d" % self.memory_mb)
+        cmd.extend(self.extra_args)
+        cmd.extend(arguments)
+
+        env = dict(os.environ)
+        existing = env.get("LEAN_PATH", "")
+        staged = os.pathsep.join(str(d) for d in search)
+        env["LEAN_PATH"] = (staged + os.pathsep + existing) if existing else staged
+        try:
+            return subprocess.run(
+                cmd,
+                cwd=self.project_dir,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=timeout_s,
+                env=env,
+            )
+        except subprocess.TimeoutExpired:
+            return None
 
     def build_probe(self, task: StatementTask, kind: ProbeKind) -> str | None:
         """Build the Lean source that answers one question about a statement.

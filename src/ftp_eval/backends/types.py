@@ -28,6 +28,8 @@ from .soundness import SoundnessReport
 
 __all__ = [
     # what a backend is asked
+    "ModuleSource",
+    "ModuleBuild",
     "ProofTask",
     "ProofAttempt",
     "StatementTask",
@@ -134,6 +136,69 @@ class Diagnostic:
             "line": self.line,
             "column": self.column,
             "kind": self.kind.value if self.kind else None,
+        }
+
+
+@dataclass(frozen=True)
+class ModuleSource:
+    """One module in an ordered build.
+
+    Modules are compiled in the order given, and a later one may import an
+    earlier one by its dotted ``module`` name. That ordering is the whole
+    point: it is what lets a problem be *sealed* -- elaborated, with its
+    propositions fixed -- before any answer exists.
+    """
+
+    #: Dotted name, e.g. ``Bench.P001``. What an importer writes.
+    module: str
+    source: str
+    #: Safe to build once and reuse across answers. True only for trusted
+    #: modules: a problem is the same for every participant, and rebuilding
+    #: its Mathlib-heavy elaboration per answer is the dominant cost. Never
+    #: set it for an answer -- one participant's build artifacts must not be
+    #: visible to another's.
+    cacheable: bool = False
+
+    @property
+    def path_parts(self) -> tuple[str, ...]:
+        return tuple(self.module.split("."))
+
+
+@dataclass
+class ModuleBuild:
+    """The result of an ordered multi-module build.
+
+    ``axioms`` is the ``#print axioms`` listing for the declaration the
+    caller asked about: names when it was obtained, ``()`` when the
+    declaration provably depends on none, and ``None`` when no listing was
+    found. ``None`` means the audit did not run, and must never be read as
+    a clean result -- which is the same discipline the single-file path uses.
+    """
+
+    status: Status
+    #: Which module failed, when one did.
+    failed_module: str = ""
+    axioms: tuple[str, ...] | None = None
+    diagnostics: tuple[Diagnostic, ...] = ()
+    error_kind: "ErrorKind | None" = None
+    compile_time_s: float = 0.0
+    #: Whether the sealed module came from cache rather than being rebuilt.
+    reused_cache: bool = False
+    raw: Mapping[str, Any] = field(default_factory=dict)
+
+    @property
+    def verified(self) -> bool:
+        return self.status is Status.VERIFIED
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "status": self.status.value,
+            "failed_module": self.failed_module,
+            "axioms": None if self.axioms is None else list(self.axioms),
+            "error_kind": self.error_kind.value if self.error_kind else None,
+            "diagnostics": [d.to_dict() for d in self.diagnostics[:5]],
+            "compile_time_s": self.compile_time_s,
+            "reused_cache": self.reused_cache,
         }
 
 
