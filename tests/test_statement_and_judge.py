@@ -22,7 +22,7 @@ from ftp_eval import (
     load_triplets,
 )
 from ftp_eval.proving.backends.lean4 import Lean4Verifier, parse_lean_theorem, parse_printed_axioms
-from ftp_eval.pipeline import EndToEndRunner, EndToEndStatus, combine
+from ftp_eval.end_to_end import EndToEndRunner, EndToEndStatus, combine
 from ftp_eval.formalizing.checker import format_statement_summary
 
 
@@ -447,7 +447,7 @@ def test_trivial_formalization_with_a_valid_proof_does_not_score():
     assert results[0].status is EndToEndStatus.PROVED_WRONG_STATEMENT
     assert not results[0].solved
     assert "WRONG statement" in __import__(
-        "ftp_eval.pipeline", fromlist=["format_end_to_end"]
+        "ftp_eval.end_to_end", fromlist=["format_end_to_end"]
     ).format_end_to_end(results)
 
 

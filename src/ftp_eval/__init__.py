@@ -67,7 +67,7 @@ from .analysis.modes import (
     classify_success,
     looks_truncated,
 )
-from .pipeline import EndToEndResult, EndToEndRunner, EndToEndStatus
+from .end_to_end import EndToEndResult, EndToEndRunner, EndToEndStatus
 from .analysis.structure import (
     Correlation,
     ProofStructure,

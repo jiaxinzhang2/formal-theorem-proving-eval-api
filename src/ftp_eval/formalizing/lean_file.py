@@ -76,6 +76,20 @@ class LeanDeclaration:
     start_line: int = 0
     #: The declaration's full source text, attributes and docstring included.
     source: str = ""
+    #: Enclosing ``namespace``/``section`` path at the point of declaration.
+    #: Part of the declaration's identity: the same bare name under a
+    #: different namespace is a different theorem.
+    namespace: str = ""
+
+    @property
+    def qualified_name(self) -> str:
+        """``Demo.t`` for ``theorem t`` inside ``namespace Demo``."""
+        if not self.namespace:
+            return self.name
+        # A name already written with the namespace prefix is not doubled.
+        if self.name == self.namespace or self.name.startswith(self.namespace + "."):
+            return self.name
+        return "%s.%s" % (self.namespace, self.name)
 
     @property
     def categories(self) -> tuple[str, ...]:
@@ -153,8 +167,39 @@ class LeanFile:
     source: str = ""
 
     def by_name(self) -> dict[str, LeanDeclaration]:
-        """Name -> declaration. Later duplicates win, as Lean would shadow."""
-        return {d.name: d for d in self.declarations}
+        """Fully-qualified name -> declaration.
+
+        Qualified, not bare: ``theorem t`` inside ``namespace Demo`` is
+        ``Demo.t``, and the same bare name under a different namespace is a
+        *different* theorem. Matching on the bare name would accept an
+        answer that proves ``Other.t`` when ``Demo.t`` was asked for.
+
+        Bare names are also registered as aliases when unambiguous, so a
+        caller naming a target without its namespace still finds it.
+        """
+        out: dict[str, LeanDeclaration] = {}
+        bare_counts: dict[str, int] = {}
+        for declaration in self.declarations:
+            out[declaration.qualified_name] = declaration
+            bare_counts[declaration.name] = bare_counts.get(declaration.name, 0) + 1
+        for declaration in self.declarations:
+            if bare_counts[declaration.name] == 1:
+                out.setdefault(declaration.name, declaration)
+        return out
+
+    def duplicate_names(self) -> tuple[str, ...]:
+        """Names declared more than once.
+
+        Lean rejects a duplicate declaration, so a file containing one will
+        not compile -- but silently picking one of them would mean judging a
+        file that cannot exist, and choosing the wrong one is exactly how a
+        decoy would work.
+        """
+        seen: dict[str, int] = {}
+        for declaration in self.declarations:
+            key = declaration.qualified_name
+            seen[key] = seen.get(key, 0) + 1
+        return tuple(sorted(name for name, count in seen.items() if count > 1))
 
     def statements(self) -> tuple[LeanDeclaration, ...]:
         return tuple(d for d in self.declarations if d.is_statement)
@@ -171,6 +216,26 @@ class LeanFile:
             "declarations": [d.to_dict() for d in self.declarations],
             "unparsed": list(self.unparsed),
         }
+
+
+_NAMESPACE_RE = re.compile(r"^\s*(namespace|end)\s+(\S+)\s*$", re.MULTILINE)
+
+
+def _namespace_at(source: str, offset: int) -> str:
+    """The enclosing ``namespace`` path at a point in the file.
+
+    Walks the ``namespace X`` / ``end X`` pairs before ``offset``. An
+    ``end`` that does not match the open namespace (it closes a ``section``)
+    is ignored rather than popping the wrong scope.
+    """
+    stack: list[str] = []
+    for match in _NAMESPACE_RE.finditer(source, 0, offset):
+        keyword, name = match.group(1), match.group(2)
+        if keyword == "namespace":
+            stack.append(name)
+        elif stack and stack[-1] == name:
+            stack.pop()
+    return ".".join(stack)
 
 
 def _block_start(source: str, keyword_offset: int, floor: int) -> int:
@@ -391,6 +456,7 @@ def parse_lean_file(source: str) -> LeanFile:
                 docstring=docstrings[-1].strip() if docstrings else "",
                 start_line=source[: blocks[index]].count("\n") + 1,
                 source=source[blocks[index] : end].rstrip(),
+                namespace=_namespace_at(source, offset),
             )
         )
 

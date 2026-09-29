@@ -53,7 +53,11 @@ SOLVED = FILLED.replace(
     ":= by\n  sorry", ":= by\n  refine ⟨⟨{1, 2, 4}, by decide, by decide⟩, ?_⟩\n  decide"
 )
 
-TARGET = "erdos_1.least_N_3"
+#: Fully qualified: the theorem lives inside `namespace Erdos1`, and the
+#: bare name is not its identity -- `Other.erdos_1.least_N_3` is a different
+#: theorem, which an adversarial answer would otherwise exploit.
+TARGET = "Erdos1.erdos_1.least_N_3"
+BARE = "erdos_1.least_N_3"
 
 
 def match(submission: str, **kw):
@@ -82,6 +86,8 @@ def test_the_target_is_inferred_without_being_named():
 
 def test_naming_the_target_explicitly_works_too():
     assert match(SOLVED, target=TARGET).status is MatchStatus.MATCHED
+    # The bare name resolves too, when unambiguous.
+    assert match(SOLVED, target=BARE).status is MatchStatus.MATCHED
 
 
 def test_reformatting_is_not_a_mismatch():
@@ -355,7 +361,7 @@ def test_a_proof_line_ending_in_a_bracket_does_not_steal_the_boundary():
 def test_definitions_and_statements_are_separated():
     parsed = parse_lean_file(PROBLEM)
     assert [d.name for d in parsed.definitions()] == ["IsSumDistinctSet"]
-    assert [d.name for d in parsed.statements()] == [TARGET]
+    assert [d.qualified_name for d in parsed.statements()] == [TARGET]
 
 
 def test_normalize_keeps_everything_except_holes_and_whitespace():

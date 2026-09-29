@@ -34,7 +34,7 @@ jobs:
       # this enforces the absolute budgets and prints the numbers into the
       # log so a slowdown is visible even when it stays under budget.
       - name: Metrics performance budgets
-        run: python benchmarks/bench_metrics.py --check
+        run: python tests/measure_speed.py --check
 
       - name: Lint
         run: ruff check src tests
@@ -53,8 +53,8 @@ jobs:
           ftp-eval doctor -b mock --smoke
           # --strict must fail here: the fixtures contain a `sorry` proof.
           if ftp-eval verify -b mock \
-               --tasks examples/tasks.jsonl \
-               --attempts examples/attempts.jsonl \
+               --tasks examples/jsonl-mode/tasks.jsonl \
+               --attempts examples/jsonl-mode/attempts.jsonl \
                --out /tmp/results.jsonl --k 1,2 --strict --quiet; then
             echo "expected a non-zero exit: the fixtures contain reward hacking"
             exit 1
@@ -67,12 +67,12 @@ jobs:
       - name: Smoke test statement checking and end-to-end
         run: |
           ftp-eval check-statement --judge mock --yes -b mock \
-            --informal examples/triplet/informal.jsonl \
-            --formal examples/triplet/formal.jsonl --quiet
+            --informal examples/jsonl-mode/triplet/informal.jsonl \
+            --formal examples/jsonl-mode/triplet/formal.jsonl --quiet
           ftp-eval eval-all -b mock --judge mock --yes \
-            --informal examples/triplet/informal.jsonl \
-            --formal examples/triplet/formal.jsonl \
-            --proofs examples/triplet/proof.jsonl \
+            --informal examples/jsonl-mode/triplet/informal.jsonl \
+            --formal examples/jsonl-mode/triplet/formal.jsonl \
+            --proofs examples/jsonl-mode/triplet/proof.jsonl \
             --out /tmp/combined.jsonl --quiet | tee /tmp/combined.txt
           grep -q "proved_wrong_statement" /tmp/combined.txt || {
             echo "expected the unfaithful-statement fixture to be caught"; exit 1; }
@@ -82,16 +82,35 @@ jobs:
       # definition, so a clean exit here would mean the check is not working.
       - name: Smoke test theorem/answer matching
         run: |
-          ftp-eval match examples/lean-files/theorem.lean \
-            examples/lean-files/answer-good.lean \
-            examples/lean-files/answer-with-helpers.lean \
-            examples/lean-files/answer-unproved.lean | tee /tmp/match-ok.txt
+          ftp-eval match examples/answer-verdicts/theorem.lean \
+            examples/answer-verdicts/answer-good.lean \
+            examples/answer-verdicts/answer-with-helpers.lean \
+            examples/answer-verdicts/answer-unproved.lean | tee /tmp/match-ok.txt
           grep -q "verdict: statement_matches_unverified_proof" /tmp/match-ok.txt
           grep -q "matched_but_unproved" /tmp/match-ok.txt
-          if ftp-eval match --strict examples/lean-files/theorem.lean \
-               examples/lean-files/answer-gutted.lean \
-               examples/lean-files/answer-weakened.lean \
-               examples/lean-files/answer-smuggled.lean --quiet; then
+          if ftp-eval match --strict examples/answer-verdicts/theorem.lean \
+               examples/answer-verdicts/answer-gutted.lean \
+               examples/answer-verdicts/answer-weakened.lean \
+               examples/answer-verdicts/answer-smuggled.lean --quiet; then
             echo "expected a non-zero exit: these answers do not prove the theorem"
             exit 1
           fi
+
+      # The contest pipeline: a benchmark folder of Lean problems, graded
+      # for several participants. The fixtures include an answer that guts a
+      # definition and one that leaves a cited helper unproved, so --strict
+      # must exit non-zero.
+      - name: Smoke test benchmark grading
+        run: |
+          ftp-eval grade \
+            --problems benchmarks/demo-2026/problems \
+            --submissions benchmarks/demo-2026/submissions \
+            --out /tmp/grade-results --run-id ci --quiet | tee /tmp/grade.txt
+          grep -q "stage 2 skipped" /tmp/grade.txt
+          grep -q "carol/P099.lean" /tmp/grade.txt   # misfiled file reported
+          grep -q "not verified" /tmp/grade.txt      # toolchain unverified
+          for f in run.json problems.json problems.tsv leaderboard.tsv \
+                   summary.json 1-match/all.jsonl 1-match/refused.jsonl \
+                   2-compile/all.jsonl 3-report/by-problem.tsv; do
+            test -f "/tmp/grade-results/ci/$f" || { echo "missing $f"; exit 1; }
+          done

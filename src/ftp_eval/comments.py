@@ -40,6 +40,87 @@ _COMPILED: dict[str, tuple[tuple[re.Pattern[str], str], ...]] = {
     for language, rules in COMMENT_SYNTAX.items()
 }
 
+#: Languages handled by the scanner below rather than by regex. Regex
+#: cannot express "not inside a string literal" or "nested to depth n",
+#: and both of those are exploitable -- see :func:`_scan`.
+_SCANNED = {
+    "lean4": ("--", "/-", "-/"),
+    "lean3": ("--", "/-", "-/"),
+}
+
+
+def _scan(text: str, line: str, block_open: str, block_close: str) -> str:
+    """Strip comments with a scanner that understands strings and nesting.
+
+    Two things a regex gets wrong here, both of which an adversarial
+    submission can use:
+
+    * **String literals.** ``s = "a -- b"`` is not a comment. A regex
+      stripper deletes from ``--`` to end of line, so ``"a -- ALPHA"`` and
+      ``"a -- OMEGA"`` normalize to the same text and two *different*
+      theorems compare equal. That is a false match, the expensive
+      direction.
+    * **Nested block comments.** Lean's ``/- -/`` nests. A non-greedy regex
+      stops at the first ``-/``, so ``/- /- -/ axiom cheat -/`` leaves
+      ``axiom cheat -/`` looking like live code. That direction is only
+      noise -- an honest file gets flagged -- but it is avoidable.
+
+    Comments become spaces, never nothing, so stripping cannot glue two
+    tokens into a third.
+    """
+    out: list[str] = []
+    i, n = 0, len(text)
+    depth = 0
+    while i < n:
+        ch = text[i]
+        if depth:
+            if text.startswith(block_open, i):
+                depth += 1
+                out.append("  ")
+                i += 2
+                continue
+            if text.startswith(block_close, i):
+                depth -= 1
+                out.append("  ")
+                i += 2
+                continue
+            out.append("\n" if ch == "\n" else " ")
+            i += 1
+            continue
+
+        if ch == '"':
+            # Copy the literal verbatim, escapes included, so nothing
+            # inside it is ever read as a comment.
+            out.append(ch)
+            i += 1
+            while i < n:
+                out.append(text[i])
+                if text[i] == "\\" and i + 1 < n:
+                    out.append(text[i + 1])
+                    i += 2
+                    continue
+                if text[i] == '"':
+                    i += 1
+                    break
+                i += 1
+            continue
+
+        if text.startswith(block_open, i):
+            depth = 1
+            out.append("  ")
+            i += 2
+            continue
+
+        if text.startswith(line, i):
+            while i < n and text[i] != "\n":
+                out.append(" ")
+                i += 1
+            continue
+
+        out.append(ch)
+        i += 1
+    return "".join(out)
+
 
 def strip_comments(text: str, language: str) -> str:
     """Replace comments with whitespace.
@@ -48,9 +129,14 @@ def strip_comments(text: str, language: str) -> str:
     tokens together: ``simp/- x -/[foo]`` must not become ``simp[foo]``
     with a different meaning.
 
-    Returns ``text`` unchanged for a language with no known comment
-    syntax, rather than guessing at one.
+    Lean is handled by a scanner that respects string literals and nested
+    block comments (see :func:`_scan`); other languages use the regex
+    rules in :data:`COMMENT_SYNTAX`. Text in a language with no known
+    comment syntax comes back unchanged rather than guessed at.
     """
+    scanned = _SCANNED.get(language)
+    if scanned is not None:
+        return _scan(text, *scanned)
     out = text
     for pattern, replacement in _COMPILED.get(language, ()):
         out = pattern.sub(replacement, out)

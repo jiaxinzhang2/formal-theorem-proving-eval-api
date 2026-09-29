@@ -23,11 +23,12 @@ from typing import Any, Sequence
 from . import __version__
 from .dataset import load_attempts, load_results, load_tasks, load_triplets, write_jsonl
 from .analysis.scoring import compare as compare_summaries, summarize
-from .pipeline import EndToEndRunner, EndToEndStatus, format_end_to_end
+from .end_to_end import EndToEndRunner, EndToEndStatus, format_end_to_end
 from .registry import available, available_judges, create, create_judge
 from .proving.runner import EvalRunner, ProgressEvent, RunConfig
 from .formalizing.checker import StatementChecker, format_statement_summary
 from .formalizing.matching import SubmissionMatcher, match_submission
+from .grading import grade_contest, load_problem_set, load_submissions
 from .types import ProofAttempt, ProofTask, StatementStatus, Status
 from .proving.verifier import assemble_source, screen_soundness
 
@@ -450,6 +451,70 @@ def cmd_match(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+def cmd_grade(args: argparse.Namespace) -> int:
+    """Grade a benchmark: N problems, many participants, three stages."""
+    problem_set = load_problem_set(args.problems)
+    submissions = load_submissions(args.submissions, problem_set)
+    if not submissions:
+        print("no participant directories in %s" % args.submissions, file=sys.stderr)
+        return EXIT_USAGE
+
+    verifier = None
+    if args.backend:
+        verifier = create(args.backend, **_parse_backend_config(args.option))
+        info = verifier.info()
+        if not info.available:
+            print(
+                "backend %r is unavailable: %s\nStage 2 would be skipped, so `solved` "
+                "would mean only that the text screen passed. Re-run without -b to "
+                "accept that explicitly, or fix the backend."
+                % (info.name, info.detail),
+                file=sys.stderr,
+            )
+            return EXIT_BACKEND_UNAVAILABLE
+
+    print(
+        "grading %d problem(s) x %d participant(s)%s"
+        % (
+            len(problem_set),
+            len(submissions),
+            "" if verifier else "   [stage 2 skipped: no --backend]",
+        ),
+        file=sys.stderr,
+    )
+
+    quiet = args.quiet
+
+    def on_grade(graded: Any) -> None:
+        if not quiet:
+            print(
+                "  %-16s %s" % (graded.participant[:16], graded.format_text()),
+                file=sys.stderr,
+                flush=True,
+            )
+
+    try:
+        result = grade_contest(
+            problem_set,
+            submissions,
+            verifier=verifier,
+            timeout_s=args.timeout,
+            output_dir=args.out,
+            run_id=args.run_id,
+            on_grade=on_grade,
+        )
+    finally:
+        if verifier is not None:
+            verifier.close()
+
+    print()
+    print(result.format_text())
+
+    if args.strict and result.statistics.refused_at:
+        return EXIT_UNSOUND
+    return EXIT_OK
+
+
 def cmd_score(args: argparse.Namespace) -> int:
     results = load_results(args.results)
     summary = summarize(results, ks=_parse_ks(args.k), include_per_task=args.unsolved)
@@ -614,6 +679,36 @@ def build_parser() -> argparse.ArgumentParser:
         "--strict", action="store_true", help="exit non-zero unless every submission matches"
     )
     p_match.set_defaults(func=cmd_match)
+
+    p_grade = sub.add_parser(
+        "grade",
+        help="grade a benchmark: N Lean problems x many participants, three stages",
+    )
+    p_grade.add_argument(
+        "--problems", required=True, help="directory of problem .lean files (stem = problem id)"
+    )
+    p_grade.add_argument(
+        "--submissions",
+        required=True,
+        help="directory with one subdirectory per participant, files named after problems",
+    )
+    p_grade.add_argument(
+        "-b",
+        "--backend",
+        help="prover for stage 2. Omitted means stage 2 is skipped and `solved` "
+        "reflects the text screen only",
+    )
+    p_grade.add_argument("-o", "--option", action="append", default=[], metavar="KEY=VALUE")
+    p_grade.add_argument(
+        "--out", help="write the results directory under here (one subdirectory per run)"
+    )
+    p_grade.add_argument("--run-id", help="name the run directory (default: a UTC timestamp)")
+    p_grade.add_argument("--timeout", type=float, default=300.0, help="seconds per compile")
+    p_grade.add_argument("--quiet", action="store_true")
+    p_grade.add_argument(
+        "--strict", action="store_true", help="exit non-zero if any answer was refused"
+    )
+    p_grade.set_defaults(func=cmd_grade)
 
     p_judges = sub.add_parser("judges", help="list faithfulness judges")
     p_judges.add_argument("--json", action="store_true")

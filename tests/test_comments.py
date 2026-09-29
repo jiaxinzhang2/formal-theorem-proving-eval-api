@@ -88,13 +88,56 @@ def test_multiline_block_comments_are_handled():
     assert "trivial" in stripped
 
 
-def test_nested_looking_block_comments_stop_at_the_first_terminator():
-    # Lean's real block comments nest; this strips non-greedily and so
-    # stops at the first `-/`. Documented rather than claimed otherwise:
-    # the tail is left as code, which is the fail-loud direction -- a
-    # leftover `sorry` gets flagged rather than silently dropped.
-    stripped = strip_comments("/- outer /- inner -/ sorry -/", "lean4")
-    assert "sorry" in stripped
+def test_block_comments_nest_as_lean_does():
+    """Lean's block comments nest, and so does the stripper.
+
+    A non-greedy regex stops at the first `-/`, leaving `sorry -/` looking
+    like live code. That only ever produced noise -- an honest file flagged
+    -- but the scanner gets it right, so the noise is gone.
+    """
+    assert strip_comments("/- outer /- inner -/ sorry -/", "lean4").strip() == ""
+
+
+def test_an_unterminated_block_comment_swallows_the_rest():
+    # Which is what Lean does too: the file does not compile, and nothing
+    # after the opener is code.
+    assert strip_comments("theorem t : True := by trivial\n/- oops", "lean4").count(
+        "trivial"
+    ) == 1
+    assert "oops" not in strip_comments("/- oops\ntheorem t : True", "lean4")
+
+
+def test_a_comment_marker_inside_a_string_literal_is_not_a_comment():
+    """The one that was exploitable.
+
+    `s = "a -- ALPHA"` and `s = "a -- OMEGA"` are different statements. A
+    regex stripper deletes from `--` to end of line, so both normalize to
+    `s = "a ` and two different theorems compare equal -- a false match,
+    which is the expensive direction.
+    """
+    alpha = strip_comments('theorem t : s = "a -- ALPHA" := by rfl', "lean4")
+    omega = strip_comments('theorem t : s = "a -- OMEGA" := by rfl', "lean4")
+    assert "ALPHA" in alpha
+    assert "OMEGA" in omega
+    assert alpha != omega
+
+
+def test_a_block_comment_opener_inside_a_string_is_not_a_comment():
+    kept = strip_comments('theorem t : s = "/- not a comment -/" := by rfl', "lean4")
+    assert "not a comment" in kept
+    assert "rfl" in kept
+
+
+def test_escaped_quotes_do_not_end_the_string_early():
+    kept = strip_comments(r'theorem t : s = "he said \"-- hi\"" := by rfl', "lean4")
+    assert "hi" in kept
+    assert "rfl" in kept
+
+
+def test_a_real_comment_after_a_string_is_still_stripped():
+    stripped = strip_comments('theorem t : s = "keep" := by rfl -- drop this', "lean4")
+    assert "keep" in stripped
+    assert "drop this" not in stripped
 
 
 def test_every_declared_language_has_at_least_one_rule():

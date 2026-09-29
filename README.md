@@ -2,6 +2,23 @@
 
 A unified API for evaluating formal theorem-proving models.
 
+**New here?** Two minutes:
+
+| you want to | go to |
+|---|---|
+understand the design | [ARCHITECTURE.md](ARCHITECTURE.md), then [`src/ftp_eval/spec/`](src/ftp_eval/spec/) — the contracts, no logic |
+run a contest: N Lean problems, many participants | [`benchmarks/README.md`](benchmarks/README.md) |
+grade one answer against one problem | `ftp-eval match theorem.lean answer.lean` |
+see every input shape working | [`examples/README.md`](examples/README.md) |
+know what counts as cheating, and what does not | [`docs/soundness.md`](docs/soundness.md) |
+know what gets measured | [`docs/metrics.md`](docs/metrics.md) |
+plug in a prover | [`docs/adding-a-backend.md`](docs/adding-a-backend.md) |
+
+Nothing below needs Lean installed — every example runs on the `mock`
+backend.
+
+---
+
 A dataset of formal theorem proving has three artifacts — a problem in
 natural language, a formal statement, a formal proof — and therefore **two
 links to check**, not one:
@@ -148,7 +165,7 @@ honest miss, not tampering and not cheating.
 would flag every solved problem. The holes are normalized away; everything
 else — binders, implicitness, bounds, `=` vs `≤` — is compared exactly.
 
-Runnable fixtures in [examples/lean-files/](examples/lean-files/): an honest
+Runnable fixtures in [examples/answer-verdicts/](examples/answer-verdicts/): an honest
 answer, one with helper definitions, one that weakens the claim, one that
 guts a definition, one that leaves a cited helper unproved, one with no
 proof yet.
@@ -209,8 +226,8 @@ ftp-eval backends          # which provers can run here
 ftp-eval judges            # which judges can run here, and which cost money
 
 # Try the whole pipeline with no prover and no API key.
-ftp-eval verify -b mock --tasks examples/tasks.jsonl \
-  --attempts examples/attempts.jsonl --out results.jsonl --k 1,2 --tactics
+ftp-eval verify -b mock --tasks examples/jsonl-mode/tasks.jsonl \
+  --attempts examples/jsonl-mode/attempts.jsonl --out results.jsonl --k 1,2 --tactics
 
 # Both links, from the three-file layout.
 ftp-eval eval-all -b lean4 --judge claude --yes \
@@ -339,8 +356,8 @@ whole layer, per attempt | **0.18 ms** |
 one `lake env lean` compile, for scale | 1–60 s |
 
 ```bash
-python benchmarks/bench_metrics.py           # the numbers, reproducible
-python benchmarks/bench_metrics.py --check   # enforce budgets (CI runs this)
+python tests/measure_speed.py           # the numbers, reproducible
+python tests/measure_speed.py --check   # enforce budgets (CI runs this)
 ```
 
 Absolute budgets catch gross slowdowns, but they mean different things on

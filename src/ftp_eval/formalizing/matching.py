@@ -155,6 +155,12 @@ class MismatchKind(str, Enum):
     #: target's proof cites it, since the proof is then conditional on an
     #: assumption; otherwise dead weight worth reporting.
     UNPROVED_HELPER = "unproved_helper"
+    #: The theorem exists in the answer under a different namespace, which
+    #: makes it a different theorem.
+    NAMESPACE_CHANGED = "namespace_changed"
+    #: A name is declared more than once in the answer. Lean would reject
+    #: the file, and picking one of them would mean judging a decoy.
+    DUPLICATE_DECLARATION = "duplicate_declaration"
 
 
 @dataclass(frozen=True)
@@ -317,10 +323,29 @@ class MatchReport:
         return "\n".join(lines)
 
 
-def _dependency_names(declaration: LeanDeclaration, candidates: Sequence[str]) -> set[str]:
-    """Which of ``candidates`` the declaration's signature mentions."""
-    body = strip_comments(declaration.signature, "lean4")
-    return {name for name in candidates if name and _mentions(body, name)}
+def _dependency_names(
+    declaration: LeanDeclaration,
+    definitions: Mapping[str, LeanDeclaration],
+) -> set[str]:
+    """Definitions the statement depends on, following the chain.
+
+    Transitive, not direct. If the statement names ``IsGood`` and
+    ``IsGood``'s body names ``Size``, then changing ``Size`` changes what
+    the statement claims just as surely -- and a direct-only check would
+    call that an unrelated helper and let it through.
+    """
+    reachable: set[str] = set()
+    frontier = [strip_comments(declaration.signature, "lean4")]
+    while frontier:
+        text = frontier.pop()
+        for name, definition in definitions.items():
+            if name in reachable or not name or not _mentions(text, name):
+                continue
+            reachable.add(name)
+            frontier.append(
+                strip_comments(definition.signature + " " + definition.body, "lean4")
+            )
+    return reachable
 
 
 def _mentions(text: str, name: str) -> bool:
@@ -367,9 +392,39 @@ def match_submission(
             submission_declarations=len(submission.declarations),
         )
 
-    name = target_declaration.name
-    submitted = submission.by_name().get(name)
+    # Matched on the *fully-qualified* name. The bare name is not the
+    # theorem's identity: `Other.demo_thm` is a different theorem from
+    # `Demo.demo_thm`, and accepting it would let an answer prove anything
+    # it liked as long as the last component agreed.
+    name = target_declaration.qualified_name
+    answer_declarations = submission.by_name()
+    submitted = answer_declarations.get(name)
     mismatches: list[Mismatch] = []
+
+    if submitted is None:
+        # Distinguish "not there at all" from "there under a different
+        # namespace", which is a far more useful thing to be told.
+        elsewhere = [
+            d
+            for d in submission.declarations
+            if d.name.rsplit(".", 1)[-1] == target_declaration.name.rsplit(".", 1)[-1]
+        ]
+        if elsewhere:
+            return MatchReport(
+                target=name,
+                status=MatchStatus.MISMATCHED,
+                mismatches=(
+                    Mismatch(
+                        MismatchKind.NAMESPACE_CHANGED,
+                        "the theorem is %s, but the answer declares it as %s -- a "
+                        "different fully-qualified name is a different theorem"
+                        % (name, ", ".join(d.qualified_name for d in elsewhere[:3])),
+                    ),
+                ),
+                expected_signature=normalize_signature(target_declaration.signature),
+                problem_declarations=len(problem.declarations),
+                submission_declarations=len(submission.declarations),
+            )
 
     # The convention is one problem per file. Verify it rather than assume
     # it: if a problem file holds several theorems and no target was named,
@@ -482,6 +537,24 @@ def match_submission(
             )
         )
 
+    duplicates = submission.duplicate_names()
+    if duplicates:
+        # Lean rejects a duplicate declaration, so this file cannot compile.
+        # Silently taking one of them would mean judging a decoy: put a
+        # weakened theorem beside a correct one under the same name and the
+        # grader picks whichever the lookup happens to prefer.
+        mismatches.append(
+            Mismatch(
+                MismatchKind.DUPLICATE_DECLARATION,
+                "the answer declares %s more than once (%s); Lean would reject the "
+                "file, and which one is judged cannot be decided here"
+                % (
+                    "a name" if len(duplicates) == 1 else "names",
+                    ", ".join(duplicates[:4]),
+                ),
+            )
+        )
+
     extra = {d.name for d in submission.statements()} - {d.name for d in problem_statements}
     if extra:
         # Worth surfacing without penalising: a submission may factor its
@@ -561,7 +634,7 @@ def diff_definitions(
     problem_definitions = {d.name: d for d in problem.definitions()}
     answer_definitions = {d.name: d for d in submission.definitions()}
     used = (
-        _dependency_names(target, list(problem_definitions)) if target is not None else set()
+        _dependency_names(target, problem_definitions) if target is not None else set()
     )
 
     out: list[DefinitionDiff] = []

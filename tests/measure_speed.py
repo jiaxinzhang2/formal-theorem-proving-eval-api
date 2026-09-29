@@ -1,13 +1,18 @@
 #!/usr/bin/env python3
-"""Benchmark the analysis layer. Committed so speed claims are checkable.
+"""Measure how fast the analysis layer runs, and enforce speed budgets.
 
-The metrics in ``docs/metrics.md`` come from this script. Run it before and
+Nothing to do with the *problem* metrics in ``docs/metrics.md`` being
+measured -- this measures the cost of computing them. It lives in
+``tests/`` beside ``test_performance.py``, which holds the complexity
+guarantees these budgets complement.
+
+Committed so the speed claims in the docs are checkable. Run it before and
 after touching :mod:`ftp_eval.analysis.structure`, :mod:`ftp_eval.soundness`,
 :mod:`ftp_eval.analysis.tactics` or :mod:`ftp_eval.analysis.modes`.
 
-    python benchmarks/bench_metrics.py            # human-readable table
-    python benchmarks/bench_metrics.py --json     # machine-readable
-    python benchmarks/bench_metrics.py --check    # enforce budgets, exit 1 on breach
+    python tests/measure_speed.py            # human-readable table
+    python tests/measure_speed.py --json     # machine-readable
+    python tests/measure_speed.py --check    # enforce budgets, exit 1 on breach
 
 ``--check`` is what CI runs. Its budgets are deliberately loose -- roughly
 20-50x over the measured figures -- because the job of the absolute bounds

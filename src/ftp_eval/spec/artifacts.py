@@ -1,0 +1,49 @@
+"""Where conclusions go.
+
+A grading run's output has to answer a dispute months later without
+re-running anything, so the contract is about completeness rather than
+format: every stage's conclusion, the exact source any prover saw, and
+enough provenance to know which problem set and which toolchain produced
+the numbers.
+"""
+
+from __future__ import annotations
+
+import abc
+from typing import Any, Mapping, Sequence
+
+__all__ = ["ArtifactWriter"]
+
+
+class ArtifactWriter(abc.ABC):
+    """Records a grading run.
+
+    Implemented by :class:`~ftp_eval.grading.artifacts.RunDirectory`, which
+    writes the folder layout documented in that module.
+    """
+
+    @abc.abstractmethod
+    def write_manifest(self, **fields: Any) -> None:
+        """What was graded, with what, when.
+
+        Must record at minimum: the problem set with content hashes, the
+        participants, the backend, and both the *declared* and the
+        *observed* toolchain. Recording only the declared one hides the
+        case where a benchmark pinned to one Mathlib revision was graded
+        against another, which makes the results irreproducible.
+        """
+
+    @abc.abstractmethod
+    def write_answers(self, graded: Sequence[Any]) -> None:
+        """Every answer's conclusion at every stage it reached."""
+
+    @abc.abstractmethod
+    def write_report(self, statistics: Any, **fields: Any) -> None:
+        """The aggregate, over correct and incorrect answers alike."""
+
+    def write_probe(self, answer: Any, source: str, log: str = "") -> None:
+        """The exact text a prover was given, and what it said back.
+
+        Optional but strongly recommended: a verdict nobody can reproduce
+        is a verdict nobody can appeal.
+        """

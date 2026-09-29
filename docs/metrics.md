@@ -252,7 +252,7 @@ exercise as `brute_force_decide` climbs.
 ## Cost of measuring
 
 Measured, not estimated, and enforced. Reproduce with
-`python benchmarks/bench_metrics.py`; CI runs it with `--check`.
+`python tests/measure_speed.py`; CI runs it with `--check`.
 
 Windows AMD64, CPython 3.12, best-of-N:
 
