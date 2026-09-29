@@ -44,8 +44,8 @@ import urllib.error
 import urllib.request
 from typing import Any, Mapping, Sequence
 
-from ...shared.types import BackendInfo, Diagnostic, ErrorKind, ProofAttempt, ProofTask, Severity, Status
-from ..verifier import BackendUnavailable, RawVerdict, Verifier, VerifierError
+from .types import BackendInfo, Diagnostic, ErrorKind, ProofAttempt, ProofTask, Severity, Status
+from .verifier import BackendUnavailable, RawVerdict, Verifier, VerifierError
 
 __all__ = ["AxleVerifier", "HttpVerifier"]
 

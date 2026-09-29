@@ -35,9 +35,9 @@ from enum import Enum
 from typing import Iterable, Sequence
 
 from .comments import strip_comments
-from .types import SoundnessReport
 
 __all__ = [
+    "SoundnessReport",
     "HackClass",
     "STATEMENT_HACK_CLASSES",
     "PROOF_HACK_CLASSES",
@@ -51,6 +51,30 @@ __all__ = [
     "audit_axioms",
 ]
 
+
+@dataclass(frozen=True)
+class SoundnessReport:
+    """Why a syntactically accepted proof may still not count.
+
+    Formal verification is only a trustworthy reward signal if the thing
+    that was proved is the thing that was asked. Every check that can
+    fire here corresponds to a known way of gaming a prover: leaving
+    ``sorry`` in, asserting the goal as a fresh axiom, weakening the
+    hypotheses, or proving a different theorem entirely.
+    """
+
+    ok: bool = True
+    violations: tuple[str, ...] = ()
+
+    def with_violation(self, violation: str) -> "SoundnessReport":
+        return SoundnessReport(ok=False, violations=self.violations + (violation,))
+
+    def merge(self, other: "SoundnessReport") -> "SoundnessReport":
+        violations = self.violations + other.violations
+        return SoundnessReport(ok=not violations, violations=violations)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {"ok": self.ok, "violations": list(self.violations)}
 
 
 class HackClass(str, Enum):

@@ -7,6 +7,8 @@ decides whether "solved 40%" means what it sounds like.
 
 from __future__ import annotations
 
+from typing import Any
+
 import pytest
 
 from ftp_eval import (
@@ -26,6 +28,7 @@ from ftp_eval import (
     extract_tactics,
     looks_truncated,
 )
+from ftp_eval.proving.analysis.measure import measure
 from ftp_eval.proving.analysis.modes import (
     aggregate_failure_modes,
     aggregate_success_modes,
@@ -300,30 +303,40 @@ def test_no_automation_note_for_a_varied_run():
 # -- wired end to end -------------------------------------------------
 
 
-def test_verify_labels_a_pass_with_a_success_mode_and_no_failure_mode():
+def graded(proof: str, statement: str = "theorem t : True := by") -> Any:
+    """Verify a proof, then measure it, which is what a caller does.
+
+    The backend reports only what the prover said; deciding what to
+    measure about the proof belongs to this API, so the two steps are
+    separate and both are exercised here.
+    """
+    task = ProofTask(task_id="t", formal_statement=statement)
     backend = create("mock")
-    task = ProofTask(task_id="t", formal_statement="theorem t (n : Nat) : n = n := by")
-    result = backend.verify(
-        task, ProofAttempt(task_id="t", proof=" have k : True := trivial\n  simp MOCK_PASS")
+    result = backend.verify(task, ProofAttempt(task_id="t", proof=proof))
+    return measure(
+        result, proof=proof, formal_statement=statement, language=task.language
+    )
+
+
+def test_a_pass_gets_a_success_mode_and_no_failure_mode():
+    result = graded(
+        " have k : True := trivial\n  simp MOCK_PASS",
+        "theorem t (n : Nat) : n = n := by",
     )
     assert result.status is Status.VERIFIED
     assert result.success_mode == SuccessMode.STRUCTURED_WITH_STEPS.value
     assert result.failure_mode is None
 
 
-def test_verify_labels_a_failure_with_a_failure_mode_and_no_success_mode():
-    backend = create("mock")
-    task = ProofTask(task_id="t", formal_statement="theorem t : True := by")
-    result = backend.verify(task, ProofAttempt(task_id="t", proof=" simp MOCK_UNSOLVED"))
+def test_a_failure_gets_a_failure_mode_and_no_success_mode():
+    result = graded(" simp MOCK_UNSOLVED")
     assert result.status is Status.FAILED
     assert result.failure_mode is not None
     assert result.success_mode is None
 
 
 def test_reward_hacking_gets_the_soundness_failure_mode():
-    backend = create("mock")
-    task = ProofTask(task_id="t", formal_statement="theorem t : True := by")
-    result = backend.verify(task, ProofAttempt(task_id="t", proof=" MOCK_PASS ; sorry"))
+    result = graded(" MOCK_PASS ; sorry")
     assert result.status is Status.REJECTED
     assert result.failure_mode == FailureMode.REWARD_HACKING.value
 
@@ -343,3 +356,16 @@ def test_modes_round_trip_through_json():
     restored = VerificationResult.from_dict(json.loads(json.dumps(original.to_dict())))
     assert restored.failure_mode == "unknown_lemma"
     assert restored.success_mode is None
+
+
+def test_a_backend_verdict_carries_no_metrics_of_its_own():
+    # The separation this module relies on: a backend reports what the
+    # prover said and nothing more. If metrics ever leak back into
+    # verify(), they get computed on the one path grading does not use.
+    backend = create("mock")
+    task = ProofTask(task_id="t", formal_statement="theorem t : True := by")
+    raw = backend.verify(task, ProofAttempt(task_id="t", proof=" simp MOCK_PASS"))
+    assert raw.status is Status.VERIFIED
+    assert raw.tactics == ()
+    assert raw.structure == {}
+    assert raw.success_mode is None and raw.failure_mode is None

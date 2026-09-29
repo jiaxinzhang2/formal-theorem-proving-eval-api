@@ -13,7 +13,11 @@ import json
 
 import pytest
 
+from ftp_eval import ProofAttempt, ProofTask, Status, create
+from ftp_eval.proving.analysis.modes import FailureMode
 from ftp_eval.proving.grading import grade_contest, load_problem_set, load_submissions
+from ftp_eval.proving.grading.stages import Stage
+from ftp_eval.proving.matching import MismatchKind
 from ftp_eval.proving.grading.metadata import (
     BenchmarkManifest,
     parse_problem_metadata,
@@ -49,6 +53,13 @@ GOOD = PROBLEM.replace("answer(sorry)", "answer(1)").replace(
 )
 GUTTED = GOOD.replace(
     "abbrev IsGood (n : ℕ) : Prop := 0 < n", "abbrev IsGood (n : ℕ) : Prop := True"
+)
+#: Asserts the goal as an axiom instead of proving it. Stage 1 refuses it,
+#: so it never reaches a prover -- which is exactly why its metrics have to
+#: be collected during stage 1 or not at all.
+HACKED = GOOD.replace(
+    "@[category research open, AMS 11]",
+    "axiom cheat : IsLeast { n | IsGood n } 1\n\n@[category research open, AMS 11]",
 )
 
 
@@ -311,3 +322,85 @@ def test_reusing_a_run_id_overwrites_in_place(benchmark, tmp_path):
     first = grade_contest(problem_set, submissions, output_dir=tmp_path / "r", run_id="x")
     second = grade_contest(problem_set, submissions, output_dir=tmp_path / "r", run_id="x")
     assert first.run_directory == second.run_directory
+
+
+# -- metrics reach stage 3 --------------------------------------------
+
+
+def test_every_graded_answer_carries_metrics_including_refused_ones(benchmark):
+    """Grading used to record pass/fail and nothing else.
+
+    Stage 2 calls ``verifier.probe()``, and the metrics were computed
+    inside ``verify()``, which grading never calls -- so a contest run left
+    stage 3 with no material at all. They are collected for refused
+    answers too: those never reach a prover, so nothing else would record
+    their shape, and they are where the patterns are.
+    """
+    problem_set, submissions = load(benchmark)
+    result = grade_contest(problem_set, submissions, verifier=create("mock"))
+
+    answers = [a for p in result.participants for a in p.grades]
+    assert answers, "the fixture graded nothing"
+    for answer in answers:
+        assert answer.structure, "%s/%s has no structural metrics" % (
+            answer.participant,
+            answer.problem_id,
+        )
+        assert "chars" in answer.structure
+        # Exactly one of the two, never both and never neither.
+        assert bool(answer.success_mode) != bool(answer.failure_mode)
+
+    refused = [a for a in answers if a.failed_at is Stage.MATCH]
+    assert refused, "the fixture has no stage-1 refusal to check"
+    for answer in refused:
+        assert answer.structure, "a refused answer was left unmeasured"
+
+
+def test_reward_hacking_gets_its_own_failure_mode(benchmark):
+    (benchmark / "submissions" / "carol").mkdir()
+    (benchmark / "submissions" / "carol" / "P001.lean").write_text(HACKED, encoding="utf-8")
+    problem_set, submissions = load(benchmark)
+    result = grade_contest(problem_set, submissions, verifier=create("mock"))
+
+    hacked = [
+        a
+        for p in result.participants
+        for a in p.grades
+        if a.match and any(m.kind is MismatchKind.REWARD_HACKING for m in a.match.mismatches)
+    ]
+    assert hacked, "the fixture has no reward-hacking answer"
+    for answer in hacked:
+        assert answer.failure_mode == FailureMode.REWARD_HACKING.value
+
+
+def test_metrics_survive_the_json_record(benchmark, tmp_path):
+    problem_set, submissions = load(benchmark)
+    grade_contest(
+        problem_set,
+        submissions,
+        verifier=create("mock"),
+        output_dir=tmp_path / "out",
+        run_id="r",
+    )
+    record = json.loads(
+        (tmp_path / "out" / "r" / "answers" / "alice" / "P001.json").read_text(encoding="utf-8")
+    )
+    assert record["metrics"]["structure"]["chars"] > 0
+    assert isinstance(record["metrics"]["tactics"], list)
+
+
+def test_a_backend_verdict_carries_no_metrics_of_its_own():
+    """The separation that made the above possible.
+
+    A backend reports what the prover said. Deciding what to measure about
+    a proof is this API's question, so it happens in
+    ``proving.analysis.measure``. If metrics leak back into ``verify()``,
+    they get computed on the one path grading does not use.
+    """
+    backend = create("mock")
+    task = ProofTask(task_id="t", formal_statement="theorem t : True := by")
+    raw = backend.verify(task, ProofAttempt(task_id="t", proof=" simp MOCK_PASS"))
+    assert raw.status is Status.VERIFIED
+    assert raw.tactics == ()
+    assert raw.structure == {}
+    assert raw.success_mode is None and raw.failure_mode is None

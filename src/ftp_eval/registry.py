@@ -17,7 +17,7 @@ from __future__ import annotations
 import importlib
 from typing import Any, Callable, Iterator
 
-from .proving.verifier import Verifier
+from .backends.verifier import Verifier
 
 __all__ = [
     "register",
@@ -35,9 +35,9 @@ _REGISTRY: dict[str, Callable[..., Verifier]] = {}
 #: Backends shipped with this package, imported lazily so that a missing
 #: optional dependency in one of them cannot break the others.
 _BUILTINS: dict[str, tuple[str, str]] = {
-    "mock": ("ftp_eval.proving.backends.mock", "MockVerifier"),
-    "lean4": ("ftp_eval.proving.backends.lean4", "Lean4Verifier"),
-    "axle": ("ftp_eval.proving.backends.axle", "AxleVerifier"),
+    "mock": ("ftp_eval.backends.mock", "MockVerifier"),
+    "lean4": ("ftp_eval.backends.lean4", "Lean4Verifier"),
+    "axle": ("ftp_eval.backends.axle", "AxleVerifier"),
 }
 
 _entry_points_loaded = False

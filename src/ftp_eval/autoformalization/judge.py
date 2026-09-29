@@ -29,7 +29,7 @@ import hashlib
 from collections import Counter
 from typing import Any, Mapping, Sequence
 
-from ..shared.types import StatementTask
+from ..backends.types import StatementTask
 from .types import JudgeLabel, JudgeUsage, JudgeVerdict
 
 __all__ = [

@@ -25,7 +25,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
 
-from ..matching import MatchStatus, match_submission
+from ..matching import MatchStatus, MismatchKind, match_submission
 from .artifacts import RunDirectory
 
 from .metadata import (
@@ -38,6 +38,10 @@ from .metadata import (
 )
 from ...spec.stage import StageContext, StageId
 from .pipeline import run_stages
+from ...backends.types import Diagnostic, Severity, Status
+from ...source.lean_file import parse_lean_file
+from ..analysis.measure import proof_metrics
+from ..analysis.modes import classify_failure, classify_success
 from .stages import GradedAnswer, Stage, StageStatus
 from .statistics import ContestStatistics, summarize_contest
 
@@ -353,6 +357,7 @@ def grade_answer(
         graded.stage_reached = Stage.MATCH
         graded.stage_status = match_result.status
 
+    compile_diagnostics: tuple[str, ...] = ()
     compile_result = results.get(StageId.COMPILE)
     if compile_result is not None:
         graded.stage_reached = Stage.COMPILE
@@ -361,11 +366,72 @@ def grade_answer(
         graded.compile_detail = compile_result.detail
         graded.compile_time_s = compile_result.elapsed_s
         outcome = compile_result.payload
+        compile_diagnostics = tuple(getattr(outcome, "diagnostics", ()))
         if run_directory is not None and getattr(outcome, "source", ""):
             run_directory.write_probe(
                 graded, outcome.source, "\n".join(getattr(outcome, "diagnostics", ()))
             )
+
+    _attach_metrics(graded, problem_source, answer_source, compile_diagnostics)
     return graded
+
+
+def _answer_proof(answer_source: str, target: str) -> str:
+    """The target theorem's proof body, or the whole file if it has none.
+
+    A refused answer may have no recognizable target -- that is often why
+    it was refused -- and its shape is still worth measuring, so the
+    fallback records something rather than nothing.
+    """
+    try:
+        parsed = parse_lean_file(answer_source)
+    except Exception:  # pragma: no cover - a parse failure is not fatal here
+        return answer_source
+    for declaration in parsed.statements():
+        if not target or declaration.name == target or declaration.qualified_name == target:
+            return declaration.body or answer_source
+    return answer_source
+
+
+def _attach_metrics(
+    graded: GradedAnswer,
+    problem_source: str,
+    answer_source: str,
+    compile_diagnostics: Sequence[str] = (),
+) -> None:
+    """Measure the answer, whatever stage it stopped at.
+
+    The prover's own messages are passed through so the failure mode is
+    specific -- "unsolved goals" or "timeout" rather than "unclassified",
+    which is the difference between a usable breakdown and a useless one.
+    """
+    target = graded.match.target if graded.match else ""
+    statement = (graded.match.expected_signature if graded.match else "") or problem_source
+    graded.tactics, graded.structure = proof_metrics(
+        _answer_proof(answer_source, target), statement
+    )
+
+    if graded.solved:
+        graded.success_mode = classify_success(graded.tactics, graded.structure).value
+        return
+
+    # Which failure this was, in the vocabulary the proof-side analysis
+    # uses. Reward hacking is its own status so it does not get filed as a
+    # generic failure -- the distinction is the whole point of stage 1.
+    hacked = bool(
+        graded.match
+        and any(m.kind is MismatchKind.REWARD_HACKING for m in graded.match.mismatches)
+    )
+    mode = classify_failure(
+        Status.REJECTED if hacked else Status.FAILED,
+        None,
+        tuple(
+            Diagnostic(Severity.ERROR, message) for message in compile_diagnostics
+        ),
+        proof=_answer_proof(answer_source, target),
+        soundness_ok=not hacked,
+    )
+    graded.failure_mode = mode.value if mode else ""
 
 
 def grade_contest(

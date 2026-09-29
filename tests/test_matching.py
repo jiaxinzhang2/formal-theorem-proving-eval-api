@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import pytest
 
-from ftp_eval.proving.lean_file import (
+from ftp_eval.source.lean_file import (
     extract_answer_arguments,
     normalize_signature,
     parse_lean_file,

@@ -25,7 +25,7 @@ from collections import Counter
 from dataclasses import dataclass, field
 from typing import Any, Iterable, Mapping, Sequence
 
-from ...shared.comments import strip_comments
+from ...source.comments import strip_comments
 from .stats import Distribution, distribution
 from .tactics import extract_tactics
 

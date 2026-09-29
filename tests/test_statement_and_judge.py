@@ -20,7 +20,7 @@ from ftp_eval import (
     create,
     create_judge,
 )
-from ftp_eval.proving.backends.lean4 import Lean4Verifier, parse_lean_theorem, parse_printed_axioms
+from ftp_eval.backends.lean4 import Lean4Verifier, parse_lean_theorem, parse_printed_axioms
 
 from ftp_eval.autoformalization.checker import format_statement_summary
 
@@ -384,7 +384,7 @@ def test_claude_judge_rejects_an_unparseable_response():
 
 
 def _verdict(status: StatementStatus, *, checked: bool = True):
-    from ftp_eval.shared.types import Check, StatementVerdict
+    from ftp_eval.backends.types import Check, StatementVerdict
 
     checks = (
         (Check(CheckKind.JUDGE_FAITHFUL, True, "ok"),)
@@ -395,7 +395,7 @@ def _verdict(status: StatementStatus, *, checked: bool = True):
 
 
 def _proof(status):
-    from ftp_eval.shared.types import VerificationResult
+    from ftp_eval.backends.types import VerificationResult
 
     return VerificationResult(task_id="t", attempt_id="t#0", backend="mock", status=status)
 

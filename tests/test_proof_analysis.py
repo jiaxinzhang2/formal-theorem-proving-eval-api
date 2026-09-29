@@ -275,9 +275,16 @@ def test_failed_attempts_are_measured_too():
     # Explicitly: metrics are recorded for failures, not only successes.
     from ftp_eval import ProofAttempt, ProofTask, create
 
+    from ftp_eval.proving.analysis.measure import measure
+
     backend = create("mock")
     task = ProofTask(task_id="t", formal_statement="theorem t : True := by")
-    result = backend.verify(task, ProofAttempt(task_id="t", proof=" simp MOCK_FAIL"))
+    attempt = ProofAttempt(task_id="t", proof=" simp MOCK_FAIL")
+    result = measure(
+        backend.verify(task, attempt),
+        proof=attempt.proof,
+        formal_statement=task.formal_statement,
+    )
     assert result.status is Status.FAILED
     assert result.tactics == ("simp",)
     assert result.structure["chars"] > 0
@@ -330,7 +337,7 @@ def test_transitions_appear_in_the_report():
 
 
 def test_counts_binders_by_kind():
-    from ftp_eval.autoformalization.complexity import analyze_statement
+    from ftp_eval.source.statement_metrics import analyze_statement
 
     c = analyze_statement(
         "theorem t {α : Type} [Ring α] (x : α) (h : 0 < x) : x + 0 = x := by"
@@ -343,7 +350,7 @@ def test_counts_binders_by_kind():
 
 
 def test_counts_quantifiers_and_connectives():
-    from ftp_eval.autoformalization.complexity import analyze_statement
+    from ftp_eval.source.statement_metrics import analyze_statement
 
     c = analyze_statement("theorem t : ∀ n, n = 0 ∨ 0 < n := by")
     assert c.quantifiers == 1
@@ -351,7 +358,7 @@ def test_counts_quantifiers_and_connectives():
 
 
 def test_measures_the_conclusion_separately_from_the_binders():
-    from ftp_eval.autoformalization.complexity import analyze_statement
+    from ftp_eval.source.statement_metrics import analyze_statement
 
     simple = analyze_statement("theorem t (n : Nat) : n = n := by")
     complex_ = analyze_statement(
@@ -361,7 +368,7 @@ def test_measures_the_conclusion_separately_from_the_binders():
 
 
 def test_statement_complexity_survives_an_unparseable_statement():
-    from ftp_eval.autoformalization.complexity import analyze_statement
+    from ftp_eval.source.statement_metrics import analyze_statement
 
     # Token and quantifier counts should still come through rather than
     # the whole measurement returning nothing.
@@ -373,12 +380,19 @@ def test_statement_complexity_survives_an_unparseable_statement():
 def test_statement_complexity_travels_with_the_result():
     from ftp_eval import ProofAttempt, ProofTask, create
 
+    from ftp_eval.proving.analysis.measure import measure
+
     backend = create("mock")
     task = ProofTask(
         task_id="t",
         formal_statement="theorem t (n : Nat) (h : 0 < n) : n ^ 2 >= n := by",
     )
-    result = backend.verify(task, ProofAttempt(task_id="t", proof=" nlinarith MOCK_PASS"))
+    attempt = ProofAttempt(task_id="t", proof=" nlinarith MOCK_PASS")
+    result = measure(
+        backend.verify(task, attempt),
+        proof=attempt.proof,
+        formal_statement=task.formal_statement,
+    )
     assert result.structure["statement_binders"] == 2
     assert result.structure["statement_hypotheses"] == 1
 

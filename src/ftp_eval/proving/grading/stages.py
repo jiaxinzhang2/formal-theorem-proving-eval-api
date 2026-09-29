@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any
+from typing import Any, Mapping
 
 from ..matching import MatchReport, MatchStatus
 
@@ -60,6 +60,16 @@ class GradedAnswer:
     #: How far the answer got, and how it fared there.
     stage_reached: Stage = Stage.MATCH
     stage_status: StageStatus = StageStatus.NOT_RUN
+    #: Stage 3's raw material: which tactics the answer used, every
+    #: structural metric, and the mode it succeeded or failed in.
+    #: Collected for refused and accepted answers alike -- a metric that
+    #: exists only on successes cannot be compared against anything, and
+    #: an answer refused at stage 1 never reaches a prover, so nothing
+    #: else would record its shape.
+    tactics: tuple[str, ...] = ()
+    structure: Mapping[str, Any] = field(default_factory=dict)
+    failure_mode: str = ""
+    success_mode: str = ""
 
     @property
     def solved(self) -> bool:
@@ -123,6 +133,12 @@ class GradedAnswer:
                 "compile_time_s": self.compile_time_s,
             },
             "match": self.match.to_dict() if self.match else None,
+            "metrics": {
+                "tactics": list(self.tactics),
+                "failure_mode": self.failure_mode or None,
+                "success_mode": self.success_mode or None,
+                "structure": dict(self.structure),
+            },
         }
 
     def format_text(self) -> str:

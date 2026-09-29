@@ -13,12 +13,8 @@ import abc
 import time
 from typing import Any, Mapping, Sequence
 
-from .analysis.modes import classify_failure, classify_success
-from ..autoformalization.complexity import analyze_statement
-from .analysis.structure import analyze_proof
-from .analysis.tactics import extract_tactics
-from ..shared.soundness import screen_source
-from ..shared.types import (
+from ..source.soundness import screen_source
+from .types import (
     Assembly,
     BackendInfo,
     Diagnostic,
@@ -176,23 +172,6 @@ class Verifier(abc.ABC):
     ) -> VerificationResult:
         budget = task.timeout_s if task.timeout_s is not None else timeout_s
         started = time.monotonic()
-        # Measured before anything can return early, so that a failure, a
-        # timeout and a harness error all carry the same structural record
-        # as a success. Comparing the shape of failures against the shape
-        # of passes is most of the analytical value here.
-        tactics = extract_tactics(attempt.proof, task.language)
-        structure = analyze_proof(attempt.proof, task.language, tactics=tactics).to_dict()
-        # The statement's own complexity travels with the result so solve
-        # rate can be correlated against it -- the closest thing to a
-        # difficulty axis available without human labels.
-        structure.update(
-            {
-                "statement_" + key: value
-                for key, value in analyze_statement(
-                    task.formal_statement, task.language
-                ).to_dict().items()
-            }
-        )
 
         def finish(
             status: Status,
@@ -202,23 +181,11 @@ class Verifier(abc.ABC):
             raw: Mapping[str, Any] | None = None,
             compile_time_s: float | None = None,
         ) -> VerificationResult:
-            # Both directions are classified here, once, so no caller has
-            # to re-derive them and a pass and a failure are described in
-            # equal detail.
+            # Deliberately no metrics here. A backend reports what the
+            # prover said; deciding what to measure about a proof belongs
+            # to the API that consumes it, so a verdict is passed through
+            # `proving.analysis.measure` to be filled in.
             report = soundness or SoundnessReport()
-            if status is Status.VERIFIED:
-                failure_mode = None
-                success_mode = classify_success(tactics, structure).value
-            else:
-                failure_mode = classify_failure(
-                    status,
-                    error_kind,
-                    tuple(diagnostics),
-                    proof=attempt.proof,
-                    soundness_ok=report.ok,
-                )
-                failure_mode = failure_mode.value if failure_mode else None
-                success_mode = None
             return VerificationResult(
                 task_id=task.task_id,
                 attempt_id=attempt.attempt_id or task.task_id,
@@ -227,15 +194,11 @@ class Verifier(abc.ABC):
                 error_kind=error_kind,
                 soundness=report,
                 diagnostics=tuple(diagnostics),
-                failure_mode=failure_mode,
-                success_mode=success_mode,
                 wall_time_s=time.monotonic() - started,
                 compile_time_s=compile_time_s,
                 model=attempt.model,
                 sample_index=attempt.sample_index,
                 split=task.split,
-                tactics=tactics,
-                structure=structure,
                 raw=dict(raw or {}),
             )
 

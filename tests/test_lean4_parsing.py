@@ -9,8 +9,8 @@ from __future__ import annotations
 
 import pytest
 
-from ftp_eval.proving.backends.lean4 import Lean4Verifier, classify_lean_message, parse_lean_log
-from ftp_eval.shared.types import ErrorKind, Severity
+from ftp_eval.backends.lean4 import Lean4Verifier, classify_lean_message, parse_lean_log
+from ftp_eval.backends.types import ErrorKind, Severity
 
 
 def test_parses_position_and_severity():

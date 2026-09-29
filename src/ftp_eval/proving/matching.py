@@ -53,10 +53,10 @@ from typing import Any, Mapping, Sequence
 
 import dataclasses
 
-from ..shared.comments import strip_comments
-from ..shared.soundness import HackClass, parse_label, screen_source
-from ..shared.types import StatementTask, Status
-from .lean_file import (
+from ..source.comments import strip_comments
+from ..source.soundness import HackClass, parse_label, screen_source
+from ..backends.types import StatementTask, Status
+from ..source.lean_file import (
     LeanDeclaration,
     LeanFile,
     extract_answer_arguments,

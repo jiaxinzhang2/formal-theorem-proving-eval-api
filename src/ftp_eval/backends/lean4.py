@@ -23,7 +23,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable
 
-from ...shared.types import (
+from .types import (
     BackendInfo,
     Diagnostic,
     ErrorKind,
@@ -36,8 +36,8 @@ from ...shared.types import (
     Status,
 )
 
-from ...shared.soundness import audit_axioms
-from ..verifier import BackendUnavailable, RawVerdict, Verifier, VerifierError
+from ..source.soundness import audit_axioms
+from .verifier import BackendUnavailable, RawVerdict, Verifier, VerifierError
 
 __all__ = [
     "Lean4Verifier",

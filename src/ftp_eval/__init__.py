@@ -48,9 +48,9 @@ from __future__ import annotations
 __version__ = "0.1.0"
 
 from .autoformalization.checker import StatementChecker
-from .autoformalization.complexity import StatementComplexity, analyze_statement
+from .source.statement_metrics import StatementComplexity, analyze_statement
 from .autoformalization.judge import ConsensusJudge, Judge, JudgeError, MockJudge
-from .shared.comments import strip_comments
+from .source.comments import strip_comments
 from .io import read_jsonl, write_jsonl
 from .proving.analysis.modes import (
     Attribution,
@@ -73,7 +73,7 @@ from .proving.grading import (
     load_problem_set,
     load_submissions,
 )
-from .proving.lean_file import LeanDeclaration, LeanFile, parse_lean_file
+from .source.lean_file import LeanDeclaration, LeanFile, parse_lean_file
 from .proving.matching import (
     MatchReport,
     MatchStatus,
@@ -81,7 +81,7 @@ from .proving.matching import (
     SubmissionMatcher,
     match_submission,
 )
-from .proving.verifier import (
+from .backends.verifier import (
     BackendUnavailable,
     RawVerdict,
     Verifier,
@@ -97,9 +97,9 @@ from .registry import (
     register,
     register_judge,
 )
-from .shared.soundness import HackClass, audit_axioms, screen_source
+from .source.soundness import HackClass, audit_axioms, screen_source
 from .proving.analysis.stats import Correlation, correlate_with_success, distribution, point_biserial
-from .shared.types import (
+from .backends.types import (
     Assembly,
     BackendInfo,
     Diagnostic,

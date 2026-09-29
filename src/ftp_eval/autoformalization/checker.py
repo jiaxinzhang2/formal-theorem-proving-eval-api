@@ -23,10 +23,10 @@ import time
 from typing import Any, Sequence
 
 from .judge import Judge, JudgeError
-from ..shared.soundness import STATEMENT_HACK_CLASSES, screen_source
-from ..shared.types import ProbeKind, StatementTask, Status
+from ..source.soundness import STATEMENT_HACK_CLASSES, screen_source
+from ..backends.types import ProbeKind, StatementTask, Status
 from .types import Check, CheckKind, JudgeLabel, StatementStatus, StatementVerdict
-from ..proving.verifier import Verifier
+from ..backends.verifier import Verifier
 
 __all__ = ["StatementChecker"]
 

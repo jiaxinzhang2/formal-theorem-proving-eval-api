@@ -38,7 +38,7 @@ from .proving.grading import grade_contest, load_problem_set, load_submissions
 from .proving.matching import SubmissionMatcher
 from .registry import available, available_judges, create, create_judge
 from .io import write_jsonl
-from .shared.types import ProofAttempt, ProofTask, StatementTask, Status
+from .backends.types import ProofAttempt, ProofTask, StatementTask, Status
 
 EXIT_OK = 0
 EXIT_USAGE = 2

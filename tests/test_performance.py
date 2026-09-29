@@ -38,7 +38,7 @@ from ftp_eval import (
     screen_source,
 )
 from ftp_eval.proving.analysis.structure import sample_duplication
-from ftp_eval.shared.soundness import PATTERNS, strip_comments
+from ftp_eval.source.soundness import PATTERNS, strip_comments
 
 #: Ratio ceiling for a 4x size increase. Linear is 4, quadratic is 16.
 #: 9 leaves generous room for constant-factor and cache effects while
