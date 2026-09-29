@@ -1,3 +1,5 @@
+Frozen benchmark grading checks a compiled `Problem.Target` through `Submission.solution` and audits its axiom closure. It does not compare theorem text. The statement-screening sections below describe the independent low-level verifier API. See [architecture](../ARCHITECTURE.md).
+
 # Soundness screening
 
 A formal prover is only a trustworthy reward signal if the thing that got

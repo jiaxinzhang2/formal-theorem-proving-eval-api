@@ -19,15 +19,16 @@ def benchmark(tmp_path):
     The shape a real contest has: a folder of problems, a folder per
     participant. MOCK_PASS / MOCK_FAIL steer the mock prover.
     """
-    problem = """import Mathlib
-
-theorem %s : True := by
-  sorry
+    problem = """namespace Problem
+-- %s
+def Target : Prop := True
+end Problem
 """
-    answer = """import Mathlib
-
-theorem %s : True := by
+    answer = """import Bench.%s
+namespace Submission
+theorem solution : Problem.Target := by
   %s
+end Submission
 """
 
     problems = tmp_path / "problems"
@@ -134,8 +135,8 @@ def test_cli_grade_end_to_end(benchmark, capsys):
     # layout promises.
     run = next(results.iterdir())
     assert (run / "run.json").exists()
-    assert (run / "1-match" / "all.jsonl").exists()
-    assert (run / "3-report" / "by-problem.tsv").exists()
+    assert (run / "1-interface" / "all.jsonl").exists()
+    assert (run / "4-report" / "by-problem.tsv").exists()
     assert (run / "leaderboard.tsv").exists()
 
 
@@ -222,3 +223,12 @@ def test_http_backend_parses_diagnostic_objects():
 def test_http_backend_is_unavailable_without_configuration():
     assert not AxleVerifier(url="", api_key="").info().available
     assert not AxleVerifier(url="https://example.invalid", api_key="").info().available
+
+
+def test_cli_grade_strict_rejects_unverified_answers(benchmark):
+    problems, submissions, _ = benchmark
+    assert main(["grade", "--problems", str(problems), "--submissions", str(submissions), "--quiet", "--strict"]) == EXIT_UNSOUND
+
+def test_removed_match_command_is_not_advertised():
+    from ftp_eval.cli import build_parser
+    assert "match" not in build_parser().format_help()

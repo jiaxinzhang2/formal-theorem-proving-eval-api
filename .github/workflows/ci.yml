@@ -57,7 +57,9 @@ jobs:
       # proof-side rules marks every well-formed problem broken.
       - name: Smoke test problem-set auditing
         run: |
-          ftp-eval audit --problems benchmarks/demo-2026/problems \
+          mkdir -p /tmp/audit-problems
+          printf '/-!\n- mathdb_id: ci\n- source: ci\n- prose: Prove True.\n-/\ntheorem P001 : True := by sorry\n' > /tmp/audit-problems/P001.lean
+          ftp-eval audit --problems /tmp/audit-problems \
             --judge mock --yes --quiet | tee /tmp/audit.txt
           if grep -q "malformed" /tmp/audit.txt; then
             echo 'the demo problems are well formed: the sorry is the hole, not a cheat'
@@ -86,40 +88,20 @@ jobs:
             exit 1
           fi
 
-      # Two-file matching: does answer.lean prove theorem.lean? The
-      # fixtures include an answer that compiles on its own but guts a
-      # definition, so a clean exit here would mean the check is not working.
-      - name: Smoke test theorem/answer matching
+      - name: Smoke test frozen benchmark grading
         run: |
-          ftp-eval match examples/answer-verdicts/theorem.lean \
-            examples/answer-verdicts/answer-good.lean \
-            examples/answer-verdicts/answer-with-helpers.lean \
-            examples/answer-verdicts/answer-unproved.lean | tee /tmp/match-ok.txt
-          grep -q "verdict: statement_matches_unverified_proof" /tmp/match-ok.txt
-          grep -q "matched_but_unproved" /tmp/match-ok.txt
-          if ftp-eval match --strict examples/answer-verdicts/theorem.lean \
-               examples/answer-verdicts/answer-gutted.lean \
-               examples/answer-verdicts/answer-weakened.lean \
-               examples/answer-verdicts/answer-smuggled.lean --quiet; then
-            echo "expected a non-zero exit: these answers do not prove the theorem"
-            exit 1
-          fi
-
-      # The contest pipeline: a benchmark folder of Lean problems, graded
-      # for several participants. The fixtures include an answer that guts a
-      # definition and one that leaves a cited helper unproved, so --strict
-      # must exit non-zero.
-      - name: Smoke test benchmark grading
-        run: |
-          ftp-eval grade \
-            --problems benchmarks/demo-2026/problems \
+          ftp-eval grade --problems benchmarks/demo-2026/problems \
             --submissions benchmarks/demo-2026/submissions \
             --out /tmp/grade-results --run-id ci --quiet | tee /tmp/grade.txt
-          grep -q "stage 2 skipped" /tmp/grade.txt
-          grep -q "carol/P099.lean" /tmp/grade.txt   # misfiled file reported
-          grep -q "not verified" /tmp/grade.txt      # toolchain unverified
-          for f in run.json problems.json problems.tsv leaderboard.tsv \
-                   summary.json 1-match/all.jsonl 1-match/refused.jsonl \
-                   2-compile/all.jsonl 3-report/by-problem.tsv; do
+          grep -q "kernel checks not run" /tmp/grade.txt
+          grep -q "carol/P099.lean" /tmp/grade.txt
+          for f in run.json events.jsonl problems.json problems.tsv leaderboard.tsv \
+                   summary.json 1-interface/all.jsonl 1-interface/refused.jsonl \
+                   2-kernel/all.jsonl 3-axioms/all.jsonl 4-report/by-problem.tsv; do
             test -f "/tmp/grade-results/ci/$f" || { echo "missing $f"; exit 1; }
           done
+          if ftp-eval grade --problems benchmarks/demo-2026/problems \
+               --submissions benchmarks/demo-2026/submissions --strict --quiet; then
+            echo "unverified answers must never pass strict grading"
+            exit 1
+          fi

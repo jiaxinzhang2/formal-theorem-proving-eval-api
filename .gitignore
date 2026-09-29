@@ -34,3 +34,8 @@ Thumbs.db
 
 # pytest temp dirs (created when TMPDIR is unset)
 pytest-of-*/
+
+# Frozen-module builds and benchmark runs
+.ftp_eval_build/
+benchmarks/*/results/
+runs/

@@ -100,10 +100,10 @@ beats any regex. See [soundness.md](soundness.md).
 
 ## Thread safety
 
-The runner parallelizes with threads, so `thread_safe = True` requires
+A caller parallelizing with threads must only use `thread_safe = True` when
 that concurrent `_verify` calls not share mutable state. Separate
 subprocesses with separate temp files qualify; a single long-lived REPL
-session does not. Set `thread_safe = False` and the runner drops to
+session does not. Use `thread_safe = False` to signal that callers must use
 concurrency 1 and says so. Being slow beats corrupting a run.
 
 If you write temp files, write them where the prover can resolve imports
@@ -141,3 +141,15 @@ at minimum:
 Then, once, against the real prover: one known-good proof and one
 known-broken proof. A backend that says "available" but cannot tell those
 apart is worse than one that says it is broken.
+
+
+## Frozen benchmark grading
+
+Implement `build_modules(modules, audit_declaration=..., timeout_s=...)` for grading.
+Compile modules in order, in a fresh answer-specific build directory and fresh
+processes. Only trusted modules marked `cacheable` may be reused. Return ModuleBuild
+with the kernel status and the requested declaration's axiom closure. A missing
+listing is `axioms=None`; a verified empty closure is `axioms=()`.
+Include diagnostics and raw backend responses for persistent checkpoints.
+Returning None signals unsupported module builds and never counts as solved.
+The low-level verify/probe interface alone is insufficient for benchmark grading.

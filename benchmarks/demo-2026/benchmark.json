@@ -1,8 +1,8 @@
 {
   "name": "demo-2026",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "language": "lean4",
-  "description": "A three-problem demo of the benchmark folder layout. A real set would hold 100 problems, one theorem per file.",
+  "description": "Three frozen targets; answers export Submission.solution and may add arbitrary helpers.",
   "problem_count": 3,
   "toolchain": {
     "note": "Pin these so a result is reproducible. The grader records them in every run's run.json.",
@@ -10,9 +10,32 @@
     "mathlib_rev": "unpinned-in-this-demo"
   },
   "conventions": {
-    "one_theorem_per_file": true,
-    "problem_id": "the file stem, e.g. P001",
-    "answer_hole": "answer(sorry) marks a value the participant must supply",
-    "statement_is_fixed": "the theorem's signature and the definitions it uses must come back unchanged"
+    "problem_id": "file stem",
+    "interface": "Submission.solution : Problem.Target"
+  },
+  "problems": {
+    "P001": {
+      "module": "Bench.P001",
+      "gold_arguments": [
+        "1"
+      ]
+    }
+  },
+  "policy": {
+    "allowed_imports": [
+      "Mathlib",
+      "Std",
+      "Batteries",
+      "Init",
+      "Lean",
+      "Aesop"
+    ],
+    "allowed_axioms": [
+      "propext",
+      "Classical.choice",
+      "Quot.sound"
+    ],
+    "allow_global_instances": true,
+    "isolate_builds": true
   }
 }

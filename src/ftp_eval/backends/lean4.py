@@ -14,6 +14,7 @@ Requirements: a Lean 4 project directory (one containing
 from __future__ import annotations
 
 import os
+import json
 import re
 import hashlib
 import shutil
@@ -571,22 +572,24 @@ class Lean4Verifier(Verifier):
             return None
         assert self.project_dir is not None
 
-        run_id = hashlib.sha256(
-            "\u0000".join(m.module + m.source for m in modules).encode("utf-8")
-        ).hexdigest()[:16]
         root = self.project_dir / ".ftp_eval_build"
         cache_root = root / "cache"
-        # Per-build directory, never shared. This is the isolation: two
-        # answers to the same problem cannot see each other's artifacts,
-        # because neither directory is on the other's search path.
-        run_root = root / "run" / run_id
+        runs = root / "run"
+        runs.mkdir(parents=True, exist_ok=True)
+        run_root = Path(tempfile.mkdtemp(prefix="answer-", dir=runs))
         started = time.monotonic()
         search: list[Path] = []
         reused = False
         try:
             for module in modules:
                 if module.cacheable:
-                    digest = hashlib.sha256(module.source.encode("utf-8")).hexdigest()[:24]
+                    cache_key = {
+                        "module": module.module, "source": self._with_options(module.source),
+                        "toolchain": (self.project_dir / "lean-toolchain").read_text(encoding="utf-8") if (self.project_dir / "lean-toolchain").exists() else "",
+                        "lake_manifest": (self.project_dir / "lake-manifest.json").read_text(encoding="utf-8") if (self.project_dir / "lake-manifest.json").exists() else "",
+                        "extra_args": self.extra_args,
+                    }
+                    digest = hashlib.sha256(json.dumps(cache_key, sort_keys=True).encode("utf-8")).hexdigest()[:24]
                     home = cache_root / digest
                     olean = home / Path(*module.path_parts).with_suffix(".olean")
                     if home not in search:
@@ -715,6 +718,10 @@ class Lean4Verifier(Verifier):
                 Status.TIMEOUT, failed_module=module.module, error_kind=ErrorKind.TIMEOUT
             )
         log = (proc.stdout or "") + ("\n" + proc.stderr if proc.stderr else "")
+        diagnostics = tuple(parse_lean_log(log))
+        if proc.returncode != 0 or any(d.severity is Severity.ERROR for d in diagnostics):
+            return ModuleBuild(Status.FAILED, failed_module=module.module,
+                               diagnostics=diagnostics, raw={"exit_code": proc.returncode, "log": log})
         listing = parse_printed_axioms(log, declaration)
         return ModuleBuild(
             Status.VERIFIED,

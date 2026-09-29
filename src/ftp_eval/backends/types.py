@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from dataclasses import asdict, dataclass, field
 from enum import Enum
 from typing import Any, Iterable, Mapping
@@ -159,6 +160,10 @@ class ModuleSource:
     #: visible to another's.
     cacheable: bool = False
 
+    def __post_init__(self) -> None:
+        if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*", self.module):
+            raise ValueError("invalid Lean module name: %r" % self.module)
+
     @property
     def path_parts(self) -> tuple[str, ...]:
         return tuple(self.module.split("."))
@@ -199,6 +204,7 @@ class ModuleBuild:
             "diagnostics": [d.to_dict() for d in self.diagnostics[:5]],
             "compile_time_s": self.compile_time_s,
             "reused_cache": self.reused_cache,
+            "raw": dict(self.raw),
         }
 
 

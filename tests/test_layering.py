@@ -1,36 +1,10 @@
-"""The layering, enforced rather than described.
-
-Three layers, and every import must go strictly downward::
-
-    spec/                the contracts
-    backends/            talking to a prover, and screening what it is
-                         given: types, verifier, mock/lean4/axle, plus
-                         soundness screening and the comment scanner it
-                         needs
-    proving/             API 1 -- does this answer prove this theorem?
-    autoformalization/   API 2 -- is this statement faithful? A judge and
-                         nothing else; it takes one dataclass from below
-
-This file exists because the rule was broken twice while nobody was
-checking. ``proving/verifier.py`` imported statement metrics from
-``autoformalization/``, and ``autoformalization/checker.py`` imported the
-Verifier from ``proving/`` -- so the "two separate APIs" were a circle. The
-second one also hid a bug: metrics computed in the backend layer were
-computed on the one code path grading does not use.
-
-There was a fourth layer, ``source/``, holding the comment scanner and the
-soundness screen. It was justified by both APIs needing it, and that stopped
-being true when the faithfulness check became pure judge -- so it folded
-into ``backends/``, where the verifier applies the screen a backend may not
-opt out of.
-
-A docstring cannot prevent any of that from happening again. A test can.
-"""
+"""Enforce three dependency layers with AST imports, including absolute and nested imports.
+The two APIs may not import each other; benchmark and artifact contracts must be implemented."""
 
 from __future__ import annotations
 
 import pathlib
-import re
+import ast
 
 import pytest
 
@@ -44,11 +18,6 @@ LAYER = {
     "proving": 2,
     "autoformalization": 2,
 }
-
-#: Indented too, because a function-local import evades the rule just as
-#: effectively as a top-level one -- and one did.
-IMPORT_RE = re.compile(r"^[ \t]*from (\.+)([\w.]*) import ", re.M)
-
 
 def _modules() -> list[pathlib.Path]:
     return sorted(p for p in ROOT.rglob("*.py") if "__pycache__" not in p.parts)
@@ -71,8 +40,17 @@ def _edges() -> list[tuple[str, str, str]]:
         if len(parts) < 2 or parts[0] not in LAYER:
             continue  # a top-level file: cli.py, registry.py, io.py
         source = parts[0]
-        for match in IMPORT_RE.finditer(module.read_text(encoding="utf-8")):
-            target = _resolve(module, match.group(1), match.group(2))
+        tree = ast.parse(module.read_text(encoding="utf-8"))
+        targets = []
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ImportFrom):
+                if node.level:
+                    targets.append(_resolve(module, "." * node.level, node.module or ""))
+                elif node.module and node.module.startswith("ftp_eval."):
+                    targets.append(node.module.removeprefix("ftp_eval."))
+            elif isinstance(node, ast.Import):
+                targets.extend(alias.name.removeprefix("ftp_eval.") for alias in node.names if alias.name.startswith("ftp_eval."))
+        for target in targets:
             destination = target.split(".")[0]
             if destination not in LAYER or destination == source:
                 continue
@@ -99,14 +77,6 @@ def test_the_two_apis_do_not_import_each_other():
         if {src, dst} == {"proving", "autoformalization"}
     ]
     assert not crossings, "the two APIs reference each other:\n  " + "\n  ".join(crossings)
-
-
-def test_source_layer_imports_nothing_else_in_the_package():
-    # What makes it safe for everything above to stand on.
-    reaching_out = [
-        "%s imports %s/" % (module, dst) for module, src, dst in _edges() if src == "source"
-    ]
-    assert not reaching_out, "source/ reached upward:\n  " + "\n  ".join(reaching_out)
 
 
 def test_no_catch_all_layer_came_back():

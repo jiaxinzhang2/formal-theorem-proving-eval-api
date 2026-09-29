@@ -1,138 +1,66 @@
-"""The three stages, and one answer's trip through them.
-
-Kept in its own module because the pipeline's shape is the thing worth
-being able to read: which stage an answer reached, why it stopped, and
-what each stage concluded.
-"""
-
-from __future__ import annotations
-
+"""A frozen-interface verdict with proof metrics for benchmark reports."""
 from dataclasses import dataclass, field
-from enum import Enum
 from typing import Any, Mapping
 
-from ..matching import MatchReport, MatchStatus
+from ...backends.types import Status
+from ...spec.stage import StageId, StageStatus
+from ..interface import InterfaceVerdict
 
+Stage = StageId
 __all__ = ["Stage", "StageStatus", "GradedAnswer"]
 
-
-class Stage(str, Enum):
-    """Which stage of the pipeline."""
-
-    #: Does the answer state the theorem that was set? Text only.
-    MATCH = "match"
-    #: Does the prover accept the proof, of the theorem's proposition?
-    COMPILE = "compile"
-    #: What happened across every answer. Never stops anything.
-    REPORT = "report"
-
-
-class StageStatus(str, Enum):
-    """How an answer fared at the stage it reached."""
-
-    #: Cleared the stage; the pipeline continued.
-    PASSED = "passed"
-    #: Failed here. Later stages did not run.
-    FAILED = "failed"
-    #: The stage could not run -- no prover configured, probe unbuildable.
-    #: Distinct from failing, and must never be read as either verdict.
-    NOT_RUN = "not_run"
-
-
 @dataclass
-class GradedAnswer:
-    """One answer, through the pipeline.
-
-    ``stage_reached`` and ``stage_status`` together say exactly where the
-    answer ended up, so no result is ever of unclear provenance. In
-    particular, ``solved`` is only ever true when a stage actually
-    established it -- never by default and never by omission.
-    """
-
-    problem_id: str
-    participant: str = ""
-    #: Stage 1.
-    match: MatchReport | None = None
-    #: Stage 2, when it ran.
-    compile_status: StageStatus = StageStatus.NOT_RUN
-    compile_detail: str = ""
-    compile_time_s: float | None = None
-    #: How far the answer got, and how it fared there.
-    stage_reached: Stage = Stage.MATCH
-    stage_status: StageStatus = StageStatus.NOT_RUN
-    #: Stage 3's raw material: which tactics the answer used, every
-    #: structural metric, and the mode it succeeded or failed in.
-    #: Collected for refused and accepted answers alike -- a metric that
-    #: exists only on successes cannot be compared against anything, and
-    #: an answer refused at stage 1 never reaches a prover, so nothing
-    #: else would record its shape.
+class GradedAnswer(InterfaceVerdict):
     tactics: tuple[str, ...] = ()
     structure: Mapping[str, Any] = field(default_factory=dict)
     failure_mode: str = ""
     success_mode: str = ""
+    modules: Mapping[str, str] = field(default_factory=dict)
 
     @property
-    def solved(self) -> bool:
-        """Whether the answer is established as proving the theorem.
-
-        Stage ② is the authority when it ran. Without it, stage ① saying
-        ``matched`` means "states the right theorem and supplies a proof" --
-        as much as can be said without compiling, and the report says so
-        rather than implying the proof was checked.
-        """
-        if self.compile_status is StageStatus.PASSED:
-            return True
-        if self.compile_status is StageStatus.FAILED:
-            return False
-        return bool(self.match and self.match.status.answers_the_problem)
+    def compile_time_s(self) -> float | None:
+        return self.build.compile_time_s if self.build else None
 
     @property
-    def kernel_checked(self) -> bool:
-        return self.compile_status in (StageStatus.PASSED, StageStatus.FAILED)
+    def compile_status(self) -> StageStatus:
+        if self.build is None or self.build.status in (Status.ERROR, Status.SKIPPED):
+            return StageStatus.NOT_RUN
+        return StageStatus.PASSED if self.build.verified else StageStatus.FAILED
 
     @property
     def failed_at(self) -> Stage | None:
-        """The stage that refused the answer, if one did."""
-        if self.match and not self.match.status.answers_the_problem:
-            return Stage.MATCH
-        if self.compile_status is StageStatus.FAILED:
-            return Stage.COMPILE
-        return None
+        if self.compile_status is StageStatus.NOT_RUN and self.refused_at == "kernel":
+            return None
+        return Stage(self.refused_at) if self.refused_at else None
+
+    @property
+    def stage_reached(self) -> Stage:
+        if self.axiom_audit is not None:
+            return Stage.AXIOMS
+        if self.build is not None:
+            return Stage.KERNEL
+        return Stage.INTERFACE
 
     @property
     def reason(self) -> str:
-        """One line on why the answer ended where it did."""
-        if self.failed_at is Stage.MATCH and self.match:
-            fatal = self.match.fatal_mismatches
-            if fatal:
-                return "%s: %s" % (fatal[0].kind.value, fatal[0].detail)
-            return self.match.status.value
-        if self.failed_at is Stage.COMPILE:
-            return self.compile_detail or "the prover rejected the proof"
-        if self.compile_status is StageStatus.PASSED:
-            return "kernel confirmed the proof of the theorem's proposition"
-        if self.match and self.match.status is MatchStatus.MATCHED_BUT_UNPROVED:
-            return "states the theorem; no proof supplied"
-        if self.match and self.match.status.answers_the_problem:
-            return "states the theorem and supplies a proof (not compiled)"
-        return "not graded"
+        if self.report is not None and self.report.faults:
+            return self.report.faults[0][1]
+        if self.build is None:
+            return "kernel check not run; no supported module-build backend"
+        if not self.build.verified:
+            return next((d.message for d in self.build.diagnostics if d.message), self.build.status.value)
+        if self.axiom_audit is None:
+            return "axiom audit not run"
+        if not self.axiom_audit.ok:
+            return "; ".join(self.axiom_audit.violations)
+        return "kernel checked the frozen target; axiom audit passed"
 
     def to_dict(self) -> dict[str, Any]:
         return {
-            "problem_id": self.problem_id,
-            "participant": self.participant,
-            "solved": self.solved,
-            "kernel_checked": self.kernel_checked,
+            **super().to_dict(),
             "stage_reached": self.stage_reached.value,
-            "stage_status": self.stage_status.value,
             "failed_at": self.failed_at.value if self.failed_at else None,
             "reason": self.reason,
-            "compile": {
-                "status": self.compile_status.value,
-                "detail": self.compile_detail,
-                "compile_time_s": self.compile_time_s,
-            },
-            "match": self.match.to_dict() if self.match else None,
             "metrics": {
                 "tactics": list(self.tactics),
                 "failure_mode": self.failure_mode or None,
@@ -140,12 +68,3 @@ class GradedAnswer:
                 "structure": dict(self.structure),
             },
         }
-
-    def format_text(self) -> str:
-        mark = "OK  " if self.solved else "NO  "
-        return "%s %-14s stage=%-8s %s" % (
-            mark,
-            self.problem_id[:14],
-            (self.failed_at or self.stage_reached).value,
-            self.reason[:96],
-        )

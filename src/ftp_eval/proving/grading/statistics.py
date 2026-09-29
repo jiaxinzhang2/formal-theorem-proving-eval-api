@@ -1,18 +1,4 @@
-"""Stage 3: what happened, across every answer.
-
-Takes **everything**, including the answers that never reached stage 2.
-That is the point: "12 answers restated the theorem" and "30 answers
-failed to compile" call for completely different responses from a setter,
-and a stage that only looked at compiled answers could report neither.
-
-Three cuts, because they answer different questions:
-
-* **By participant** -- the leaderboard.
-* **By problem** -- which problems were solved by nobody, by everybody, or
-  attempted and refused. The setter's own signal about the problem set.
-* **By stage and reason** -- where answers died and why. A spike at stage 1
-  usually means the format was unclear, not that the field was weak.
-"""
+"""Aggregate every frozen-interface verdict, including refused and unverified answers."""
 
 from __future__ import annotations
 
@@ -32,8 +18,9 @@ class ProblemStatistics:
     problem_id: str
     attempted: int = 0
     solved: int = 0
-    refused_at_match: int = 0
-    refused_at_compile: int = 0
+    refused_at_interface: int = 0
+    refused_at_kernel: int = 0
+    refused_at_axioms: int = 0
     not_compiled: int = 0
 
     @property
@@ -50,8 +37,9 @@ class ProblemStatistics:
             "attempted": self.attempted,
             "solved": self.solved,
             "solve_rate": round(self.solve_rate, 4),
-            "refused_at_match": self.refused_at_match,
-            "refused_at_compile": self.refused_at_compile,
+            "refused_at_interface": self.refused_at_interface,
+            "refused_at_kernel": self.refused_at_kernel,
+            "refused_at_axioms": self.refused_at_axioms,
             "not_compiled": self.not_compiled,
         }
 
@@ -110,8 +98,7 @@ class ContestStatistics:
         ]
         if self.kernel_checked < self.answers:
             lines.append(
-                "  %d answer(s) were NOT compiled, so `solved` there means the text "
-                "screen passed, not that the proof was checked."
+                "  %d answer(s) have no conclusive kernel verdict; none count as solved."
                 % (self.answers - self.kernel_checked)
             )
         if self.refused_at:
@@ -186,20 +173,25 @@ def summarize_contest(
         if failed_at is not None:
             refused[failed_at.value] += 1
             reasons[answer.reason.split("(")[0].strip()[:90]] += 1
-            if failed_at is Stage.MATCH:
-                problem.refused_at_match += 1
-            else:
-                problem.refused_at_compile += 1
+            if failed_at is Stage.INTERFACE:
+                problem.refused_at_interface += 1
+            elif failed_at is Stage.KERNEL:
+                problem.refused_at_kernel += 1
+            elif failed_at is Stage.AXIOMS:
+                problem.refused_at_axioms += 1
 
-        if answer.match:
-            for mismatch in answer.match.mismatches:
-                if mismatch.kind.value == "reward_hacking":
-                    from ...backends.soundness import parse_label
+        from ...backends.soundness import parse_label
 
-                    for violation in mismatch.detail.split("; "):
-                        _, pattern_id = parse_label(violation)
-                        if pattern_id:
-                            hacks[pattern_id] += 1
+        violations = []
+        if answer.report:
+            violations.extend(detail for fault, detail in answer.report.faults if fault.value == "reward_hacking")
+        if answer.axiom_audit:
+            violations.extend(answer.axiom_audit.violations)
+        for detail in violations:
+            for violation in detail.split("; "):
+                _, pattern_id = parse_label(violation)
+                if pattern_id:
+                    hacks[pattern_id] += 1
 
     stats.refused_at = dict(refused)
     stats.reasons = dict(reasons)

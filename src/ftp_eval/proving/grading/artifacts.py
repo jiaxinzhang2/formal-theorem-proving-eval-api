@@ -1,53 +1,14 @@
-"""The results folder: every stage's conclusion, on disk.
+"""Durable run inputs, per-stage checkpoints and final reports.
 
-A grading run produces one directory, and the layout is the point -- a
-disputed result has to be answerable from it months later without re-running
-anything::
-
-    results/2026-09-29T0312Z/
-      run.json                     what was graded, with what, when
-      problems.tsv                 problem ids + content hashes
-      leaderboard.tsv              the ranking, scannable
-      summary.txt                  stage 3 in prose
-      summary.json                 stage 3 as data
-
-      1-match/
-        all.jsonl                  every stage-1 verdict
-        refused.jsonl              only the refusals, for review
-      2-compile/
-        all.jsonl                  every stage-2 verdict
-        probes/<participant>/<problem>.lean    the exact source compiled
-        logs/<participant>/<problem>.log       what the prover said
-      3-report/
-        by-problem.tsv             solve counts, difficulty signal
-        by-participant.tsv         per-participant totals
-        reasons.tsv                why answers were refused
-      answers/
-        <participant>/<problem>.json    all three stages for one answer
-
-Naming rules, so the folder stays predictable:
-
-* **Stage directories are numbered.** ``1-match``, ``2-compile``,
-  ``3-report`` -- reading order is the pipeline order.
-* **``.jsonl`` streams, ``.json`` single objects, ``.tsv`` for anything a
-  human or a spreadsheet will open.** No format is used for two purposes.
-* **Participant and problem ids are path components, never concatenated
-  into filenames.** ``alice/P001.json`` sorts and globs; ``alice_P001``
-  breaks the moment an id contains an underscore.
-* **The probe sources are kept.** A verdict nobody can reproduce is a
-  verdict nobody can appeal, so the exact text handed to the prover is on
-  disk next to what it said.
-* **Problem hashes are recorded.** Which version of the problem set was
-  graded is then a fact, not a memory.
-* **The run id is a UTC timestamp** (``2026-09-29T0312Z``), so runs sort
-  chronologically and never collide. ``--run-id`` overrides it.
-"""
+See docs/runs.md for the schema-v2 directory layout. Sources are saved before
+backend calls, events are flushed, and JSON snapshots are replaced atomically."""
 
 from __future__ import annotations
 
 import hashlib
 import json
 import os
+import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -62,7 +23,7 @@ __all__ = ["RunDirectory", "default_run_id"]
 
 def default_run_id() -> str:
     """A UTC timestamp that sorts chronologically and is filename-safe."""
-    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H%MZ")
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H%M%S.%fZ") + "-" + uuid.uuid4().hex[:8]
 
 
 def _safe(component: str) -> str:
@@ -90,9 +51,14 @@ class RunDirectory(ArtifactWriter):
         cls, base: str | os.PathLike[str], run_id: str | None = None
     ) -> "RunDirectory":
         root = Path(base) / (run_id or default_run_id())
-        for sub in ("1-match", "2-compile/probes", "2-compile/logs", "3-report", "answers"):
+        root.mkdir(parents=True, exist_ok=False)
+        for sub in ("1-interface", "2-kernel/probes", "2-kernel/logs", "3-axioms", "4-report", "answers"):
             (root / sub).mkdir(parents=True, exist_ok=True)
-        return cls(root=root)
+        writer = cls(root=root)
+        for relative in ("events.jsonl", "1-interface/all.jsonl", "1-interface/refused.jsonl",
+                         "2-kernel/all.jsonl", "3-axioms/all.jsonl"):
+            writer._text(relative, "")
+        return writer
 
     # -- manifest ------------------------------------------------------
 
@@ -197,53 +163,57 @@ class RunDirectory(ArtifactWriter):
 
     # -- per-stage -----------------------------------------------------
 
+    def write_inputs(self, problems: Mapping[str, str], submissions: Sequence[Any]) -> None:
+        for pid, source in problems.items():
+            self._text("inputs/problems/%s.lean" % _safe(pid), source)
+        for submission in submissions:
+            for pid, source in submission.answers.items():
+                self._text("inputs/submissions/%s/%s.lean" % (_safe(submission.participant), _safe(pid)), source)
+        self.write_run_stage("benchmark", "passed", {"problems": len(problems), "participants": len(submissions)})
+
+    def write_run_stage(self, stage: str, status: str, payload: Any = None) -> None:
+        record = {"stage": stage, "status": status, "payload": payload,
+                  "recorded_at": datetime.now(timezone.utc).isoformat()}
+        self._json("4-report/stage.json" if stage == "report" else "inputs/stage.json", record)
+        self._append("events.jsonl", record)
+
     def write_answers(self, graded: Sequence[GradedAnswer]) -> None:
-        """Every stage's conclusion, per answer and in per-stage streams."""
-        match_rows: list[dict[str, Any]] = []
-        refused_rows: list[dict[str, Any]] = []
-        compile_rows: list[dict[str, Any]] = []
-
+        """Per-answer records and separate interface, kernel and audit streams."""
         for answer in graded:
-            record = answer.to_dict()
-            participant = _safe(answer.participant or "anonymous")
-            problem = _safe(answer.problem_id)
-            self._json("answers/%s/%s.json" % (participant, problem), record)
+            self._json("answers/%s/%s.json" % (_safe(answer.participant or "anonymous"), _safe(answer.problem_id)), answer.to_dict())
 
-            if answer.match is not None:
-                row = {
-                    "participant": answer.participant,
-                    "problem_id": answer.problem_id,
-                    **answer.match.to_dict(),
-                }
-                match_rows.append(row)
-                if not answer.match.status.answers_the_problem:
-                    refused_rows.append(row)
+    def write_stage(self, problem_id: str, participant: str, stage: str, event: Mapping[str, Any]) -> None:
+        """Checkpoint before advancing; append history and replace the latest snapshot."""
+        directory = {"interface": "1-interface", "kernel": "2-kernel", "axioms": "3-axioms"}[stage]
+        record = {"problem_id": problem_id, "participant": participant,
+                  "recorded_at": datetime.now(timezone.utc).isoformat(), **event}
+        self._json("%s/by-answer/%s/%s.json" % (directory, _safe(participant or "anonymous"), _safe(problem_id)), record)
+        self._append("events.jsonl", record)
+        if event["status"] != "running":
+            self._append(directory + "/all.jsonl", record)
+            if stage == "interface" and event["status"] == "failed":
+                self._append(directory + "/refused.jsonl", record)
 
-            compile_rows.append(
-                {
-                    "participant": answer.participant,
-                    "problem_id": answer.problem_id,
-                    "status": answer.compile_status.value,
-                    "detail": answer.compile_detail,
-                    "compile_time_s": answer.compile_time_s,
-                }
-            )
+    def _append(self, relative: str, record: Mapping[str, Any]) -> None:
+        with self._path(relative).open("a", encoding="utf-8", newline="\n") as handle:
+            handle.write(json.dumps(record, ensure_ascii=False) + "\n")
+            handle.flush()
+            os.fsync(handle.fileno())
 
-        self._jsonl("1-match/all.jsonl", match_rows)
-        self._jsonl("1-match/refused.jsonl", refused_rows)
-        self._jsonl("2-compile/all.jsonl", compile_rows)
+    def set_state(self, status: str, **fields: Any) -> None:
+        manifest = json.loads((self.root / "run.json").read_text(encoding="utf-8"))
+        manifest.update(status=status, **fields)
+        self._json("run.json", manifest)
 
-    def write_probe(self, answer: GradedAnswer, source: str, log: str = "") -> None:
-        """Keep the exact text compiled, and what the prover said about it.
-
-        A verdict nobody can reproduce is a verdict nobody can appeal.
-        """
-        participant = _safe(answer.participant or "anonymous")
-        problem = _safe(answer.problem_id)
-        if source:
-            self._text("2-compile/probes/%s/%s.lean" % (participant, problem), source)
-        if log:
-            self._text("2-compile/logs/%s/%s.log" % (participant, problem), log)
+    def write_modules(self, answer: GradedAnswer) -> None:
+        """Preserve all three exact module sources, even for refused answers."""
+        stem = "%s/%s" % (_safe(answer.participant or "anonymous"), _safe(answer.problem_id))
+        for module, source in answer.modules.items():
+            self._text("2-kernel/modules/%s/%s.lean" % (stem, module.replace(".", "/")), source)
+        if answer.build:
+            log = str(answer.build.raw.get("log", ""))
+            if log:
+                self._text("2-kernel/logs/%s.log" % stem, log)
 
     def write_report(
         self,
@@ -252,7 +222,7 @@ class RunDirectory(ArtifactWriter):
         leaderboard: Sequence[Mapping[str, Any]],
         graded: Sequence[GradedAnswer],
     ) -> None:
-        """Stage 3, in both machine and human form."""
+        """Aggregate reporting, in both machine and human form."""
         self._json("summary.json", statistics.to_dict())
         self._text("summary.txt", statistics.format_text() + "\n")
 
@@ -274,24 +244,25 @@ class RunDirectory(ArtifactWriter):
             ),
         )
         self._text(
-            "3-report/by-problem.tsv",
+            "4-report/by-problem.tsv",
             _tsv(
-                [("problem_id", "attempted", "solved", "solve_rate", "refused_match", "refused_compile")]
+                [("problem_id", "attempted", "solved", "solve_rate", "refused_interface", "refused_kernel", "refused_axioms")]
                 + [
                     (
                         p.problem_id,
                         p.attempted,
                         p.solved,
                         "%.3f" % p.solve_rate,
-                        p.refused_at_match,
-                        p.refused_at_compile,
+                        p.refused_at_interface,
+                        p.refused_at_kernel,
+                        p.refused_at_axioms,
                     )
                     for p in statistics.by_problem
                 ]
             ),
         )
         self._text(
-            "3-report/by-participant.tsv",
+            "4-report/by-participant.tsv",
             _tsv(
                 [("participant", "solved", "attempted", "rejected")]
                 + [
@@ -301,7 +272,7 @@ class RunDirectory(ArtifactWriter):
             ),
         )
         self._text(
-            "3-report/reasons.tsv",
+            "4-report/reasons.tsv",
             _tsv(
                 [("count", "stage", "reason")]
                 + [
@@ -321,9 +292,13 @@ class RunDirectory(ArtifactWriter):
         return path
 
     def _json(self, relative: str, payload: Any) -> None:
-        self._path(relative).write_text(
-            json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
-        )
+        path = self._path(relative)
+        temporary = path.with_suffix(path.suffix + ".tmp")
+        with temporary.open("w", encoding="utf-8", newline="\n") as handle:
+            handle.write(json.dumps(payload, indent=2, ensure_ascii=False) + "\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
 
     def _jsonl(self, relative: str, rows: Iterable[Mapping[str, Any]]) -> None:
         with self._path(relative).open("w", encoding="utf-8", newline="\n") as fh:

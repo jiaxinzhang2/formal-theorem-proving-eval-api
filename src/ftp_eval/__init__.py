@@ -1,47 +1,4 @@
-"""ftp_eval -- evaluating formal theorem proving, from Lean files.
-
-One input format: **Lean files**. A problem is one ``.lean`` file with one
-theorem; an answer is another. A benchmark is a folder of problems. There is
-no second input shape to learn.
-
-Two APIs, because they answer different questions::
-
-    natural language  ──▶  formal statement  ──▶  formal proof
-                    autoformalization/       proving/
-                    is it faithful?          does it prove it?
-
-    proving/            does this answer prove this theorem?
-      lean_file.py        parsing Lean files into declarations
-      matching.py         stage 1: statement identity
-      verifier.py         stage 2: the backend interface
-      backends/           mock, lean4, axle
-      analysis/           proof-side metrics: tactics, structure, modes
-      grading/            the contest pipeline: N problems, many participants
-
-    autoformalization/  is this formalization faithful to the problem?
-      checker.py          prover probes + an LLM judge
-      complexity.py       statement-side metrics
-      judge.py, judges/   the judge interface and its providers
-
-Shared by both, which is why they sit at the top level::
-
-    spec/          the contracts -- read this first, it is pure interface
-    types.py       the vocabulary both APIs speak
-    soundness.py   reward-hacking detection
-    comments.py    what counts as a comment, per language
-    stats.py       distributions and correlation
-    registry.py    backend and judge lookup by name
-
-Everything public is importable straight from ``ftp_eval``; the module
-paths matter only when extending the package. Full map in
-``ARCHITECTURE.md``.
-
-    from ftp_eval import match_submission
-
-    report = match_submission(open("theorem.lean").read(),
-                              open("answer.lean").read())
-    print(report.verdict)
-"""
+"""Frozen-target theorem proving, statement faithfulness, and proof analysis."""
 
 from __future__ import annotations
 
@@ -74,13 +31,12 @@ from .proving.grading import (
     load_submissions,
 )
 from .proving.lean_file import LeanDeclaration, LeanFile, parse_lean_file
-from .proving.matching import (
-    MatchReport,
-    MatchStatus,
-    MismatchKind,
-    SubmissionMatcher,
-    match_submission,
+from .proving.interface import (
+    ContestPolicy, InterfaceFault, InterfaceProblem, InterfaceReport,
+    InterfaceVerdict, grade_interface, read_interface_problem, check_interface,
+    build_check_source,
 )
+from .backends.types import ModuleBuild, ModuleSource
 from .backends.verifier import (
     BackendUnavailable,
     RawVerdict,
@@ -118,12 +74,10 @@ from .autoformalization.types import Check, CheckKind, JudgeLabel, JudgeUsage, J
 
 __all__ = [
     "__version__",
+    "ContestPolicy", "InterfaceFault", "InterfaceProblem", "InterfaceReport",
+    "InterfaceVerdict", "grade_interface", "read_interface_problem", "check_interface",
+    "build_check_source", "ModuleBuild", "ModuleSource",
     # -- proving: does this answer prove this theorem? ------------------
-    "match_submission",
-    "MatchReport",
-    "MatchStatus",
-    "MismatchKind",
-    "SubmissionMatcher",
     "parse_lean_file",
     "LeanFile",
     "LeanDeclaration",

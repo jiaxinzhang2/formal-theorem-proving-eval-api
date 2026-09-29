@@ -1,31 +1,17 @@
-"""The driver: a benchmark of N Lean problems, many participants.
+"""Load a benchmark and grade answer groups against frozen targets.
 
-Loads the problem set and the submissions, runs every answer through the
-three stages, and writes one results directory. See
-:mod:`ftp_eval.proving.grading` for the stage diagram and
-:mod:`ftp_eval.proving.grading.artifacts` for the directory layout.
-
-Three things this is built to get right, because a contest grader is
-adversarial in a way an internal eval is not:
-
-* **A missing answer, a wrong answer and an unparseable file are three
-  different outcomes.** Collapsing them loses the distinction between a
-  participant who skipped a problem and one whose work was misfiled.
-* **An unrecognized file is never silently ignored.** A submission naming a
-  problem that does not exist is reported, because dropping it would make
-  a participant's work vanish with nobody noticing.
-* **Nothing is graded twice or skipped.** The manifest reconciles: every
-  problem, every participant, every answer accounted for.
-"""
+Persist inputs and each interface/kernel/axiom step before advancing.
+Missing answers, refusals and unrecognized files remain distinct."""
 
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass, field
+import hashlib
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
 
-from ..matching import MatchStatus, MismatchKind
+from ..interface import ContestPolicy, InterfaceFault, grade_interface, read_interface_problem, build_check_source, check_arguments, check_interface
 from .artifacts import RunDirectory
 
 from .metadata import (
@@ -37,13 +23,11 @@ from .metadata import (
     reconcile_toolchain,
 )
 from ...spec.benchmark import Benchmark, BenchmarkProblem
-from ...spec.stage import StageContext, StageId
-from .pipeline import run_stages
 from ...backends.types import Diagnostic, Severity, Status
 from ..lean_file import parse_lean_file
 from ..analysis.measure import proof_metrics
 from ..analysis.modes import classify_failure, classify_success
-from .stages import GradedAnswer, Stage
+from .stages import GradedAnswer
 from .statistics import ContestStatistics, summarize_contest
 
 __all__ = [
@@ -66,7 +50,7 @@ AnswerGrade = GradedAnswer
 
 @dataclass(frozen=True)
 class ProblemSet(Benchmark):
-    """The setter's benchmark: a folder of Lean files, one theorem each."""
+    """The setter's benchmark: a folder of Lean files, one frozen Problem.Target each."""
 
     problems: Mapping[str, str]
     root: Path | None = None
@@ -185,7 +169,7 @@ class ParticipantResult:
             g
             for g in self.grades
             if not g.solved
-            and not (g.match and g.match.status is MatchStatus.MATCHED_BUT_UNPROVED)
+            and not (g.report and g.report.honest_miss)
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -241,7 +225,7 @@ class ContestResult:
             % (
                 len(self.problem_ids),
                 len(self.participants),
-                "" if self.kernel_checked else "   [stage 2 skipped -- no prover]",
+                "" if self.kernel_checked else "   [kernel checks not run]",
             ),
             "",
             "%-4s %-24s %7s %9s %9s %s"
@@ -354,54 +338,52 @@ def grade_answer(
     problem_id: str,
     participant: str = "",
     verifier: Any = None,
-    target: str | None = None,
+    module: str = "",
+    gold_arguments: Sequence[str] = (),
+    policy: ContestPolicy | None = None,
     timeout_s: float = 300.0,
     run_directory: RunDirectory | None = None,
 ) -> GradedAnswer:
-    """Run one answer through stages 1 and 2.
-
-    Stage 2 runs only if stage 1 passed. Compiling an answer that does not
-    state the theorem is wasted work, and a compile that *succeeds* on the
-    wrong theorem reads like a pass -- which is the confusion this whole
-    pipeline exists to remove.
-    """
-    # Driven through the stage objects rather than inline, so there is one
-    # code path and the ordering lives in each stage's `requires` rather
-    # than here. See ftp_eval.proving.grading.pipeline.
-    context = StageContext(
-        problem_id=problem_id,
-        problem_source=problem_source,
-        answer_source=answer_source,
-        participant=participant,
-        target=target,
-        verifier=verifier,
-        timeout_s=timeout_s,
+    """Check the interface, the frozen target's type, and its axiom closure."""
+    problem = read_interface_problem(
+        problem_source, problem_id=problem_id, module=module or "Bench." + problem_id
     )
-    results = run_stages(context)
+    problem = replace(problem, gold_arguments=tuple(gold_arguments))
+    if problem.gold_arguments and len(problem.gold_arguments) != len(problem.target_parameters):
+        raise ValueError("%s: gold_arguments must match Target's parameter count" % problem_id)
+    answer_module = "FtpSubmission.A" + hashlib.sha256(
+        (problem_id + "\0" + participant).encode("utf-8")
+    ).hexdigest()[:20]
+    # Save the exact inputs before any backend call can fail or be interrupted.
+    prepared = GradedAnswer(problem_id=problem_id, participant=participant)
+    prepared.modules = {problem.module: problem_source, answer_module: answer_source}
+    if run_directory is not None:
+        run_directory.write_modules(prepared)
 
-    graded = GradedAnswer(problem_id=problem_id, participant=participant)
-    match_result = results.get(StageId.MATCH)
-    if match_result is not None:
-        graded.match = match_result.payload
-        graded.stage_reached = Stage.MATCH
-        graded.stage_status = match_result.status
+    def checkpoint(stage: str, event: Mapping[str, Any]) -> None:
+        if run_directory is not None:
+            if stage == "kernel" and event["status"] == "running":
+                report = check_interface(problem, answer_source)
+                arguments, _ = check_arguments(problem, report)
+                prepared.modules = {**prepared.modules, answer_module + ".Check": build_check_source(problem, answer_module, arguments)}
+                run_directory.write_modules(prepared)
+            run_directory.write_stage(problem_id, participant, stage, event)
 
-    compile_diagnostics: tuple[str, ...] = ()
-    compile_result = results.get(StageId.COMPILE)
-    if compile_result is not None:
-        graded.stage_reached = Stage.COMPILE
-        graded.stage_status = compile_result.status
-        graded.compile_status = compile_result.status
-        graded.compile_detail = compile_result.detail
-        graded.compile_time_s = compile_result.elapsed_s
-        outcome = compile_result.payload
-        compile_diagnostics = tuple(getattr(outcome, "diagnostics", ()))
-        if run_directory is not None and getattr(outcome, "source", ""):
-            run_directory.write_probe(
-                graded, outcome.source, "\n".join(getattr(outcome, "diagnostics", ()))
-            )
-
-    _attach_metrics(graded, problem_source, answer_source, compile_diagnostics)
+    verdict = grade_interface(
+        problem, problem_source, answer_source, verifier=verifier,
+        participant=participant, policy=policy, answer_module=answer_module,
+        timeout_s=timeout_s, on_stage=checkpoint,
+    )
+    graded = GradedAnswer(**vars(verdict))
+    arguments, _ = check_arguments(problem, verdict.report)
+    graded.modules = {
+        **prepared.modules,
+        answer_module + ".Check": build_check_source(problem, answer_module, arguments),
+    }
+    diagnostics = tuple(d.message for d in verdict.build.diagnostics) if verdict.build else ()
+    _attach_metrics(graded, problem_source, answer_source, diagnostics)
+    if run_directory is not None:
+        run_directory.write_modules(graded)
     return graded
 
 
@@ -434,8 +416,8 @@ def _attach_metrics(
     specific -- "unsolved goals" or "timeout" rather than "unclassified",
     which is the difference between a usable breakdown and a useless one.
     """
-    target = graded.match.target if graded.match else ""
-    statement = (graded.match.expected_signature if graded.match else "") or problem_source
+    target = "Submission.solution"
+    statement = problem_source
     graded.tactics, graded.structure = proof_metrics(
         _answer_proof(answer_source, target), statement
     )
@@ -448,8 +430,8 @@ def _attach_metrics(
     # uses. Reward hacking is its own status so it does not get filed as a
     # generic failure -- the distinction is the whole point of stage 1.
     hacked = bool(
-        graded.match
-        and any(m.kind is MismatchKind.REWARD_HACKING for m in graded.match.mismatches)
+        (graded.report and any(f is InterfaceFault.REWARD_HACKING for f, _ in graded.report.faults))
+        or (graded.axiom_audit and not graded.axiom_audit.ok)
     )
     mode = classify_failure(
         Status.REJECTED if hacked else Status.FAILED,
@@ -472,64 +454,120 @@ def grade_contest(
     output_dir: str | os.PathLike[str] | None = None,
     run_id: str | None = None,
     on_grade: Callable[[GradedAnswer], None] | None = None,
+    policy: ContestPolicy | None = None,
+    run_metadata: Mapping[str, Any] | None = None,
 ) -> ContestResult:
     """Grade the whole benchmark and write the results directory."""
+    policy = policy or policy_from_manifest(problem_set.manifest)
+    interfaces = problem_set.manifest.raw.get("problems", {})
+    if not isinstance(interfaces, dict):
+        raise ValueError("benchmark problems must be an object keyed by problem id")
     run_directory = (
         RunDirectory.create(output_dir, run_id) if output_dir is not None else None
     )
     result = ContestResult(
-        problem_ids=problem_set.ids(), kernel_checked=verifier is not None
+        problem_ids=problem_set.ids()
     )
 
-    for submission in submissions:
-        participant = ParticipantResult(
-            participant=submission.participant,
-            unrecognized=submission.unrecognized,
-            total_problems=len(problem_set),
-        )
-        for problem_id in sorted(submission.answers):
-            graded = grade_answer(
-                problem_set.problems[problem_id],
-                submission.answers[problem_id],
-                problem_id=problem_id,
-                participant=submission.participant,
-                verifier=verifier,
-                timeout_s=timeout_s,
-                run_directory=run_directory,
-            )
-            participant.grades.append(graded)
-            if on_grade is not None:
-                on_grade(graded)
-        result.participants.append(participant)
-
-    # -- stage 3: everything, refused answers included ----------------
-    result.statistics = summarize_contest(
-        result.grades(),
-        problem_ids=problem_set.ids(),
-        participants=len(submissions),
-    )
-
-    # Reconciled whether or not a results folder is written: an unverified
-    # toolchain is a fact about the run, not about its output.
     observed = observed_toolchain(verifier)
-    result.toolchain_warnings = tuple(reconcile_toolchain(problem_set.manifest, observed))
-    result.problems_without_provenance = problem_set.without_provenance()
-
     if run_directory is not None:
         run_directory.write_manifest(
-            problems=problem_set.problems,
-            participants=[s.participant for s in submissions],
-            backend=getattr(verifier, "name", None),
-            problem_metadata=problem_set.metadata,
-            benchmark=problem_set.manifest,
-            observed_toolchain=observed,
+            problems=problem_set.problems, participants=[s.participant for s in submissions],
+            backend=getattr(verifier, "name", None), problem_metadata=problem_set.metadata,
+            benchmark=problem_set.manifest, observed_toolchain=observed,
             toolchain_warnings=reconcile_toolchain(problem_set.manifest, observed),
+            extra={"schema_version": 2, "grading": "frozen-interface", "status": "running",
+                   "kernel_checked": False, "policy": policy.to_dict(),
+                   "interfaces": interfaces, "run_metadata": dict(run_metadata or {}),
+                   "timeout_s": timeout_s,
+                   "unrecognized_files": {s.participant: list(s.unrecognized) for s in submissions}},
         )
-        run_directory.write_answers(result.grades())
-        run_directory.write_report(
-            result.statistics,
-            leaderboard=[p.to_dict() for p in result.leaderboard()],
-            graded=result.grades(),
+
+    if run_directory is not None:
+        run_directory.write_inputs(problem_set.problems, submissions)
+    try:
+        for submission in submissions:
+            participant = ParticipantResult(
+                participant=submission.participant,
+                unrecognized=submission.unrecognized,
+                total_problems=len(problem_set),
+            )
+            for problem_id in sorted(submission.answers):
+                config = interfaces.get(problem_id, {})
+                if not isinstance(config, dict):
+                    raise ValueError("%s: interface configuration must be an object" % problem_id)
+                gold = config.get("gold_arguments", [])
+                if not isinstance(gold, list) or not all(isinstance(x, str) for x in gold):
+                    raise ValueError("%s: gold_arguments must be a list of Lean expressions" % problem_id)
+                graded = grade_answer(
+                    problem_set.problems[problem_id],
+                    submission.answers[problem_id],
+                    problem_id=problem_id,
+                    participant=submission.participant,
+                    verifier=verifier,
+                    timeout_s=timeout_s,
+                    run_directory=run_directory,
+                    module=config.get("module", "Bench." + problem_id),
+                    gold_arguments=gold,
+                    policy=policy,
+                )
+                participant.grades.append(graded)
+                if run_directory is not None:
+                    run_directory.write_answers([graded])
+                if on_grade is not None:
+                    on_grade(graded)
+            result.participants.append(participant)
+    
+        if run_directory is not None:
+            run_directory.write_run_stage("report", "running")
+        # -- report: everything, refused answers included ----------------
+        result.statistics = summarize_contest(
+            result.grades(),
+            problem_ids=problem_set.ids(),
+            participants=len(submissions),
         )
-        result.run_directory = run_directory.root
+    
+        result.kernel_checked = bool(result.grades()) and all(g.kernel_checked for g in result.grades())
+    
+        # Reconciled whether or not a results folder is written: an unverified
+        # toolchain is a fact about the run, not about its output.
+        observed = observed_toolchain(verifier)
+        result.toolchain_warnings = tuple(reconcile_toolchain(problem_set.manifest, observed))
+        result.problems_without_provenance = problem_set.without_provenance()
+    
+        if run_directory is not None:
+            run_directory.write_report(
+                result.statistics,
+                leaderboard=[p.to_dict() for p in result.leaderboard()],
+                graded=result.grades(),
+            )
+            run_directory.write_run_stage("report", "passed", result.statistics.to_dict())
+            result.run_directory = run_directory.root
+    except BaseException as exc:
+        if run_directory is not None:
+            run_directory.set_state("interrupted" if isinstance(exc, (KeyboardInterrupt, SystemExit)) else "failed", error=str(exc))
+        raise
+    if run_directory is not None:
+        run_directory.set_state("complete", kernel_checked=result.kernel_checked)
     return result
+
+
+def policy_from_manifest(manifest: BenchmarkManifest) -> ContestPolicy:
+    """Load explicit benchmark policy; reject misspelled or malformed knobs."""
+    data = manifest.raw.get("policy", {})
+    if not isinstance(data, dict):
+        raise ValueError("benchmark policy must be an object")
+    unknown = set(data) - {"allowed_imports", "allowed_axioms", "allow_global_instances", "isolate_builds"}
+    if unknown:
+        raise ValueError("unknown policy fields: %s" % ", ".join(sorted(unknown)))
+    fields = dict(data)
+    for name in ("allowed_imports", "allowed_axioms"):
+        if name in fields:
+            values = fields[name]
+            if not isinstance(values, list) or not all(isinstance(x, str) and x for x in values):
+                raise ValueError("%s must be a list of non-empty names" % name)
+            fields[name] = tuple(values) if name == "allowed_imports" else frozenset(values)
+    for name in ("allow_global_instances", "isolate_builds"):
+        if name in fields and not isinstance(fields[name], bool):
+            raise ValueError("%s must be a boolean" % name)
+    return ContestPolicy(**fields)

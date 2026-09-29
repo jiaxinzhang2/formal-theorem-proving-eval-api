@@ -89,7 +89,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Mapping, Sequence
+from typing import Any, Callable, Mapping, Sequence
 
 from ..backends.soundness import (
     DEFAULT_ALLOWED_IMPORTS,
@@ -101,7 +101,7 @@ from ..backends.soundness import (
     parse_label,
     screen_source,
 )
-from ..backends.types import ModuleBuild
+from ..backends.types import ModuleBuild, Status, Diagnostic, Severity
 from .lean_file import LeanFile, parse_lean_file
 
 __all__ = [
@@ -157,6 +157,7 @@ class InterfaceFault(str, Enum):
     IMPORT_NOT_ALLOWED = "import_not_allowed"
     #: The file could not be parsed as Lean at all.
     UNPARSED = "unparsed"
+    INSTANCE_NOT_ALLOWED = "instance_not_allowed"
 
 
 @dataclass(frozen=True)
@@ -244,8 +245,10 @@ def read_interface_problem(
     """
     parsed = parse_lean_file(problem_source)
     target = next(
-        (d for d in parsed.declarations if d.name == TARGET_NAME), None
+        (d for d in parsed.declarations if d.qualified_name == "Problem.Target"), None
     )
+    if target is None:
+        raise ValueError("%s: expected a frozen Problem.Target definition" % problem_id)
     parameters: tuple[str, ...] = ()
     if target is not None:
         parameters = _binder_names(target.signature)
@@ -603,6 +606,18 @@ class ContestPolicy:
     #: another's, which makes a verdict depend on grading order.
     isolate_builds: bool = True
 
+    def __post_init__(self) -> None:
+        if not self.isolate_builds:
+            raise ValueError("non-isolated builds are not supported")
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "allowed_imports": list(self.allowed_imports),
+            "allowed_axioms": sorted(self.allowed_axioms),
+            "allow_global_instances": self.allow_global_instances,
+            "isolate_builds": self.isolate_builds,
+        }
+
     def audit(self, axioms: "Sequence[str] | None") -> "SoundnessReport":
         """Judge an axiom listing. ``None`` means the audit did not run.
 
@@ -643,6 +658,7 @@ class InterfaceVerdict:
     #: Whether the target was pinned to the benchmark's gold value. When
     #: false the verdict is the weaker "proved the proposition it claimed".
     against_gold: bool = False
+    stages: list[dict[str, Any]] = field(default_factory=list)
 
     @property
     def solved(self) -> bool:
@@ -670,7 +686,7 @@ class InterfaceVerdict:
 
     @property
     def kernel_checked(self) -> bool:
-        return self.build is not None
+        return self.build is not None and self.build.status not in (Status.ERROR, Status.SKIPPED)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -680,6 +696,7 @@ class InterfaceVerdict:
             "refused_at": self.refused_at,
             "kernel_checked": self.kernel_checked,
             "against_gold": self.against_gold,
+            "stages": list(self.stages),
             "interface": self.report.to_dict() if self.report else None,
             "build": self.build.to_dict() if self.build else None,
             "axioms": self.axiom_audit.to_dict() if self.axiom_audit else None,
@@ -715,6 +732,7 @@ def grade_interface(
     policy: ContestPolicy | None = None,
     answer_module: str = "",
     timeout_s: float = 300.0,
+    on_stage: Callable[[str, Mapping[str, Any]], None] | None = None,
 ) -> InterfaceVerdict:
     """Text screen, then the kernel, then the axiom listing. Never raises.
 
@@ -724,39 +742,59 @@ def grade_interface(
     an accepted proof precisely because acceptance is not the bar.
     """
     policy = policy or ContestPolicy()
-    report = check_interface(
-        problem, answer_source, allowed_imports=policy.allowed_imports
-    )
-    verdict = InterfaceVerdict(
-        problem_id=problem.problem_id, participant=participant, report=report
-    )
+    verdict = InterfaceVerdict(problem_id=problem.problem_id, participant=participant)
+
+    def record(stage: str, status: str, payload: Any = None, detail: str = "") -> None:
+        event = {"stage": stage, "status": status, "payload": payload, "detail": detail}
+        verdict.stages.append(event)
+        if on_stage is not None:
+            on_stage(stage, event)
+
+    record("interface", "running")
+    try:
+        report = check_interface(problem, answer_source, allowed_imports=policy.allowed_imports)
+        if not policy.allow_global_instances:
+            instances = [d for d in parse_lean_file(answer_source).declarations if d.kind == "instance"]
+            if instances:
+                report.faults += ((InterfaceFault.INSTANCE_NOT_ALLOWED, "benchmark policy forbids global instances"),)
+    except Exception as exc:
+        report = InterfaceReport(problem.problem_id, faults=((InterfaceFault.UNPARSED, str(exc)),))
+    verdict.report = report
+    record("interface", "passed" if report.ok else "failed", report.to_dict())
     if not report.ok or verifier is None:
+        why = "interface refused" if not report.ok else "no prover configured"
+        record("kernel", "not_run", detail=why)
+        record("axioms", "not_run", detail="kernel check did not pass")
         return verdict
 
     arguments, against_gold = check_arguments(problem, report)
     verdict.against_gold = against_gold
     module = answer_module or "%s.Submission.%s" % (
-        problem.module.split(".")[0] or "Bench",
-        participant or "answer",
+        problem.module.split(".")[0] or "Bench", participant or "answer",
     )
     check_source = build_check_source(problem, module, arguments)
-
     from ..backends.types import ModuleSource
 
-    build = verifier.build_modules(
-        [
-            # Sealed, and cacheable because it is the same for every
-            # participant -- which is also where the time goes.
-            ModuleSource(problem.module, problem_source, cacheable=True),
-            ModuleSource(module, answer_source),
-            ModuleSource("%s.Check" % module, check_source),
-        ],
-        audit_declaration=CHECK_THEOREM,
-        timeout_s=timeout_s,
-    )
-    if build is None:
-        return verdict  # not run; `solved` stays false and says so
+    record("kernel", "running")
+    try:
+        build = verifier.build_modules(
+            [ModuleSource(problem.module, problem_source, cacheable=True),
+             ModuleSource(module, answer_source),
+             ModuleSource("%s.Check" % module, check_source)],
+            audit_declaration=CHECK_THEOREM, timeout_s=timeout_s,
+        )
+    except Exception as exc:
+        build = ModuleBuild(Status.ERROR, diagnostics=(Diagnostic(Severity.ERROR, str(exc)),))
     verdict.build = build
-    if build.verified:
+    status = "not_run" if build is None or build.status in (Status.ERROR, Status.SKIPPED) else (
+        "passed" if build.verified else "failed"
+    )
+    record("kernel", status, build.to_dict() if build else None,
+           "module builds unavailable" if build is None else "")
+    if build is not None and build.verified:
+        record("axioms", "running")
         verdict.axiom_audit = policy.audit(build.axioms)
+        record("axioms", "passed" if verdict.axiom_audit.ok else "failed", verdict.axiom_audit.to_dict())
+    else:
+        record("axioms", "not_run", detail="kernel check did not pass")
     return verdict

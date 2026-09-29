@@ -1,34 +1,10 @@
-"""Command line interface: ``ftp-eval``.
-
-One input format throughout: **Lean files**. A problem is one ``.lean``
-file with one theorem, an answer is another, a benchmark is a folder of
-problems.
-
-Grading answers -- the proving API::
-
-    ftp-eval match theorem.lean answer.lean          one answer, one problem
-    ftp-eval grade --problems P/ --submissions S/    a whole benchmark
-
-Checking the problem set itself, before anyone answers it -- the
-autoformalization API::
-
-    ftp-eval audit --problems P/                     are the statements sound?
-
-Diagnostics::
-
-    ftp-eval backends          which provers can run here
-    ftp-eval judges            which judges can run here, and which cost money
-    ftp-eval doctor -b lean4   why a backend cannot run
-
-Only argparse is used, so the CLI works in a bare virtualenv.
-"""
+"""CLI: grade frozen-target answer groups, audit original statements, and diagnose backends."""
 
 from __future__ import annotations
 
 import argparse
 import json
 import sys
-from pathlib import Path
 from typing import Any, Sequence
 
 from . import __version__
@@ -36,7 +12,6 @@ from .autoformalization.checker import StatementChecker, format_statement_summar
 from .autoformalization.types import StatementStatus
 from .proving.grading import grade_contest, load_problem_set, load_submissions
 from .proving.grading.problem_health import check_problem_health, format_health_summary
-from .proving.matching import SubmissionMatcher
 from .registry import available, available_judges, create, create_judge
 from .io import write_jsonl
 from .backends.types import ProofAttempt, ProofTask, StatementTask, Status
@@ -90,74 +65,6 @@ def _open_judge(args: argparse.Namespace) -> Any:
 # -- the proving API: does this answer prove this theorem? -------------
 
 
-def cmd_match(args: argparse.Namespace) -> int:
-    """Not whether answer.lean compiles.
-
-    A file can compile perfectly having quietly restated the theorem into
-    something easier, so the question is whether it proves *this* one.
-    """
-    problem_source = Path(args.theorem).read_text(encoding="utf-8")
-
-    verifier = None
-    if args.backend:
-        verifier = create(args.backend, **_parse_options(args.option))
-        info = verifier.info()
-        if not info.available:
-            verifier.close()
-            print("backend %r is unavailable: %s" % (info.name, info.detail), file=sys.stderr)
-            return EXIT_BACKEND_UNAVAILABLE
-
-    matcher = SubmissionMatcher(verifier, timeout_s=args.timeout)
-    reports = []
-    try:
-        for answer_path in args.answer:
-            answer_source = Path(answer_path).read_text(encoding="utf-8")
-            report = matcher.check(
-                problem_source,
-                answer_source,
-                target=args.target,
-                require_proof=not args.allow_unproved,
-            )
-            reports.append((answer_path, report))
-            if not args.quiet:
-                print("== %s" % answer_path)
-                print(report.format_text())
-                print()
-
-        if args.show_probe:
-            # The source a prover is handed: the problem's proposition,
-            # closed with the answer's proof term, over the problem's own
-            # definitions. Printed rather than compiled, because compiling
-            # needs a Lean project.
-            path = reports[0][0]
-            probe = matcher.build_confirmation_source(
-                problem_source,
-                Path(path).read_text(encoding="utf-8"),
-                target=args.target,
-            )
-            print("== the source a prover would be given, for %s" % path)
-            print(probe if probe else "(could not be assembled; read that as NOT confirmed)")
-            print()
-    finally:
-        if verifier is not None:
-            verifier.close()
-
-    if args.out:
-        write_jsonl(args.out, [{"answer_file": p, **r.to_dict()} for p, r in reports])
-        print("wrote %d verdict(s) to %s" % (len(reports), args.out), file=sys.stderr)
-
-    counts: dict[str, int] = {}
-    for _, report in reports:
-        counts[report.status.value] = counts.get(report.status.value, 0) + 1
-    print("summary: " + ", ".join("%s=%d" % kv for kv in sorted(counts.items())))
-
-    if args.strict and any(
-        not r.status.answers_the_problem or r.proves_the_theorem is False for _, r in reports
-    ):
-        return EXIT_UNSOUND
-    return EXIT_OK
-
-
 def cmd_grade(args: argparse.Namespace) -> int:
     """Grade a benchmark: N problems x many participants, three stages."""
     problem_set = load_problem_set(args.problems)
@@ -176,9 +83,8 @@ def cmd_grade(args: argparse.Namespace) -> int:
         if not info.available:
             verifier.close()
             print(
-                "backend %r is unavailable: %s\nStage 2 would be skipped, so `solved` "
-                "would mean only that the text screen passed. Re-run without -b to "
-                "accept that explicitly, or fix the backend." % (info.name, info.detail),
+                "backend %r is unavailable: %s\nFix the backend for kernel checks. "
+                "Without a supported backend no answer counts as solved." % (info.name, info.detail),
                 file=sys.stderr,
             )
             return EXIT_BACKEND_UNAVAILABLE
@@ -188,7 +94,7 @@ def cmd_grade(args: argparse.Namespace) -> int:
         % (
             len(problem_set),
             len(submissions),
-            "" if verifier else "   [stage 2 skipped: no --backend]",
+            "" if verifier else "   [kernel checks not run: no --backend]",
         ),
         file=sys.stderr,
     )
@@ -212,6 +118,7 @@ def cmd_grade(args: argparse.Namespace) -> int:
             output_dir=args.out,
             run_id=args.run_id,
             on_grade=on_grade,
+            run_metadata=_parse_options(args.run_metadata),
         )
     finally:
         if verifier is not None:
@@ -220,7 +127,7 @@ def cmd_grade(args: argparse.Namespace) -> int:
     print()
     print(result.format_text())
 
-    if args.strict and result.statistics.refused_at:
+    if args.strict and any(not answer.solved for answer in result.grades()):
         return EXIT_UNSOUND
     return EXIT_OK
 
@@ -454,7 +361,7 @@ def cmd_doctor(args: argparse.Namespace) -> int:
         if good.status is not Status.VERIFIED or bad.status is Status.VERIFIED:
             print(
                 "  these fixtures only mean something to the mock backend; for a real "
-                "prover, run `match` on a known-good and a known-bad answer instead.",
+                "prover, use a known-good and a known-bad frozen benchmark instead.",
                 file=sys.stderr,
             )
     return EXIT_OK
@@ -483,38 +390,6 @@ def build_parser() -> argparse.ArgumentParser:
         )
 
     # -- proving ------------------------------------------------------
-    p_match = sub.add_parser("match", help="does answer.lean prove theorem.lean?")
-    p_match.add_argument("theorem", help="the problem file, e.g. theorem.lean")
-    p_match.add_argument("answer", nargs="+", help="the submitted file(s)")
-    add_backend(
-        p_match,
-        help="prover for the confirmation probe. Omitted means the text screen "
-        "alone, which can refuse an answer but cannot confirm one",
-    )
-    p_match.add_argument(
-        "--target",
-        help="theorem name under test. Not needed for the one-theorem-per-file "
-        "convention; supply it only when a file holds several statements",
-    )
-    p_match.add_argument(
-        "--allow-unproved",
-        action="store_true",
-        help="only check that the statement matches, not that it is proved",
-    )
-    p_match.add_argument(
-        "--show-probe",
-        action="store_true",
-        help="print the source a prover would be given: the problem's proposition "
-        "closed with the answer's proof term",
-    )
-    p_match.add_argument("--out", help="write verdicts here as JSONL")
-    p_match.add_argument("--timeout", type=float, default=300.0)
-    p_match.add_argument("--quiet", action="store_true")
-    p_match.add_argument(
-        "--strict", action="store_true", help="exit non-zero unless every answer proves it"
-    )
-    p_match.set_defaults(func=cmd_match)
-
     p_grade = sub.add_parser(
         "grade", help="grade a benchmark: N Lean problems x many participants"
     )
@@ -528,8 +403,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     add_backend(
         p_grade,
-        help="prover for stage 2. Omitted means stage 2 is skipped and `solved` "
-        "reflects the text screen only",
+        help="prover for frozen-module builds; omitted means no kernel verdict and zero solved",
     )
     p_grade.add_argument(
         "--out", help="write the results directory under here (one subdirectory per run)"
@@ -540,6 +414,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_grade.add_argument(
         "--strict", action="store_true", help="exit non-zero if any answer was refused"
     )
+    p_grade.add_argument("--run-metadata", action="append", default=[], metavar="KEY=VALUE", help="experiment labels recorded in run.json (repeatable)")
     p_grade.set_defaults(func=cmd_grade)
 
     # -- autoformalization --------------------------------------------

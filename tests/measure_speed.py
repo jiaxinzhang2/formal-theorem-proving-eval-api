@@ -39,7 +39,8 @@ from ftp_eval import (
     analyze_statement,
     create,
     extract_tactics,
-    match_submission,
+    check_interface,
+    read_interface_problem,
     screen_source,
 )
 from ftp_eval.proving.analysis.structure import sample_duplication
@@ -58,7 +59,7 @@ BUDGETS: dict[str, float] = {
     "extract_tactics: 13KB proof": 0.050,
     "analyze_statement: typical statement": 0.005,
     "sample_duplication: 1000 samples": 0.050,
-    "match_submission: one answer": 0.010,
+    "check_interface: one answer": 0.010,
     "grade: 100 problems x 1 participant": 2.000,
     "grade: 100 problems x 20 participants": 20.000,
 }
@@ -75,15 +76,13 @@ TYPICAL_STATEMENT = "theorem t {α : Type} [LinearOrder α] (n : Nat) (h : 0 < n
 #: A problem file and an answer to it, %s-templated on the problem id, in
 #: the shape the grading pipeline reads: one theorem per file.
 PROBLEM_TEMPLATE = (
-    "import Mathlib\n\n"
-    "/-! # %%s\n- mathdb_id: demo.%%s\n- source: speed-fixture\n-/\n\n"
-    "theorem %s : (0 : Nat) <= 1 := by\n  sorry\n"
+    "-- %s\nnamespace Problem\ndef Target : Prop := (0 : Nat) <= 1\nend Problem\n"
 )
 ANSWER_TEMPLATE = (
-    "import Mathlib\n\n"
-    "theorem %s : (0 : Nat) <= 1 := by\n"
+    "import Bench.%s\nnamespace Submission\n"
+    "theorem solution : Problem.Target := by\n"
     "  have key : (0 : Nat) <= 1 := Nat.zero_le 1\n"
-    "  exact key MOCK_PASS\n"
+    "  exact key\nend Submission\n"
 )
 
 
@@ -181,8 +180,8 @@ def build_cases() -> list[tuple[str, Callable[[], object], int]]:
         ),
         ("sample_duplication: 1000 samples", lambda: sample_duplication(samples), 10),
         (
-            "match_submission: one answer",
-            lambda: match_submission(problem_src % "P001", answer_src % "P001"),
+            "check_interface: one answer",
+            lambda: check_interface(read_interface_problem(problem_src % "P001", module="Bench.P001"), answer_src % "P001"),
             20,
         ),
         (

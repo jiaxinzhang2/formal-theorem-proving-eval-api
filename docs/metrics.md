@@ -1,3 +1,5 @@
+Benchmark grading now requires the frozen interface, a kernel verdict and a clean axiom audit; see [run lifecycle](runs.md). Unverified answers never count as solved.
+
 # Metrics reference
 
 Everything the harness records, by category. Recorded for **every**
@@ -6,7 +8,7 @@ how it succeeds, and most of the categories below are only interesting as
 the comparison between the two.
 
 The unit is one answer to one problem. `results/<run-id>/answers/<who>/<problem>.json`
-carries the per-answer fields, `3-report/*.tsv` the aggregates, and
+carries the per-answer fields, `4-report/*.tsv` the aggregates, and
 `summary.json` the headline numbers.
 
 Where they come from: a backend reports only what the prover said, and
@@ -24,12 +26,12 @@ The headline numbers.
 | metric | where | meaning |
 |---|---|---|
 `solved` | per answer | Established as proving the theorem. Only ever true because a stage said so |
-`kernel_checked` | per answer | Whether stage 2 actually ran. `solved` without this means the text screen passed, nothing more |
-`stage_reached` / `stage_status` | per answer | Exactly where the answer ended up, so no result is of unclear provenance |
+`kernel_checked` | per answer | Whether a conclusive kernel result was obtained. Without this an answer cannot be solved |
+`stage_reached` / `stages` | per answer | Exactly where the answer ended up, so no result is of unclear provenance |
 `failed_at` | per answer | Which stage refused it, if one did |
-`by_problem` | `3-report/by-problem.tsv` | How many participants solved each problem. A problem nobody solved and a problem everybody solved are both worth a second look |
-`by_participant` | `3-report/by-participant.tsv` | The leaderboard, with the stage each loss happened at |
-`reasons` | `3-report/reasons.tsv` | Every distinct refusal reason, counted |
+`by_problem` | `4-report/by-problem.tsv` | How many participants solved each problem. A problem nobody solved and a problem everybody solved are both worth a second look |
+`by_participant` | `4-report/by-participant.tsv` | The leaderboard, with the stage each loss happened at |
+`reasons` | `4-report/reasons.tsv` | Every distinct refusal reason, counted |
 
 `NOT_RUN` is never folded into passed or failed: a stage that could not run
 is not evidence either way. A prover error is not the participant's fault
@@ -153,7 +155,7 @@ metrics, `STATEMENT_METRIC_FIELDS` for statement ones. Passing none returns
 nothing rather than silently scanning a default that has drifted.
 
 Also aggregated for slicing: by problem, by participant, and by refusal
-reason (`3-report/*.tsv`).
+reason (`4-report/*.tsv`).
 
 **These are associations.** A metric can track success because it tracks
 task difficulty — `named_steps` correlating with failure may only mean
