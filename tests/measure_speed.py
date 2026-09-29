@@ -7,8 +7,8 @@ measured -- this measures the cost of computing them. It lives in
 guarantees these budgets complement.
 
 Committed so the speed claims in the docs are checkable. Run it before and
-after touching :mod:`ftp_eval.analysis.structure`, :mod:`ftp_eval.soundness`,
-:mod:`ftp_eval.analysis.tactics` or :mod:`ftp_eval.analysis.modes`.
+after touching :mod:`ftp_eval.proving.analysis.structure`, :mod:`ftp_eval.soundness`,
+:mod:`ftp_eval.proving.analysis.tactics` or :mod:`ftp_eval.proving.analysis.modes`.
 
     python tests/measure_speed.py            # human-readable table
     python tests/measure_speed.py --json     # machine-readable
@@ -42,7 +42,7 @@ from ftp_eval import (
     screen_source,
     summarize,
 )
-from ftp_eval.analysis.structure import sample_duplication
+from ftp_eval.proving.analysis.structure import sample_duplication
 from ftp_eval.soundness import strip_comments
 
 #: name -> seconds. A breach means something got much slower, not slightly.

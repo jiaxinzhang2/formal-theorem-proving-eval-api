@@ -14,12 +14,12 @@ from __future__ import annotations
 
 import pytest
 
-from ftp_eval.formalizing.lean_file import (
+from ftp_eval.proving.lean_file import (
     extract_answer_arguments,
     normalize_signature,
     parse_lean_file,
 )
-from ftp_eval.formalizing.matching import (
+from ftp_eval.proving.matching import (
     MatchStatus,
     MismatchKind,
     SubmissionMatcher,

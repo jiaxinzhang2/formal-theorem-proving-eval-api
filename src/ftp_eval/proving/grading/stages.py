@@ -11,7 +11,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
 
-from ..formalizing.matching import MatchReport, MatchStatus
+from ..matching import MatchReport, MatchStatus
 
 __all__ = ["Stage", "StageStatus", "GradedAnswer"]
 

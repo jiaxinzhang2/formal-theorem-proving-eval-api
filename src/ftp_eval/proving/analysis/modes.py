@@ -51,7 +51,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Iterable, Mapping, Sequence
 
-from ..types import Diagnostic, ErrorKind, Severity, Status
+from ...types import Diagnostic, ErrorKind, Severity, Status
 
 __all__ = [
     "Attribution",

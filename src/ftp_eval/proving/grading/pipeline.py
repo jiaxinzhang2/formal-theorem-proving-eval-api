@@ -23,8 +23,8 @@ from __future__ import annotations
 import time
 from typing import Sequence
 
-from ..formalizing.matching import match_submission
-from ..spec.stage import GradingStage, StageContext, StageId, StageResult, StageStatus
+from ..matching import match_submission
+from ...spec.stage import GradingStage, StageContext, StageId, StageResult, StageStatus
 from .compiling import compile_answer
 
 __all__ = ["MatchStage", "CompileStage", "STAGES", "run_stages"]
@@ -79,7 +79,7 @@ class CompileStage(GradingStage):
 
     Not "does the answer file compile". What is compiled is the *theorem's*
     proposition closed with the *answer's* proof term, over the *theorem's*
-    definitions -- see :mod:`ftp_eval.grading.compiling`.
+    definitions -- see :mod:`ftp_eval.proving.grading.compiling`.
     """
 
     id = StageId.COMPILE

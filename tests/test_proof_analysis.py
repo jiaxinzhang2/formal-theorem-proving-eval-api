@@ -5,13 +5,13 @@ from __future__ import annotations
 import pytest
 
 from ftp_eval import Status, VerificationResult, extract_tactics, summarize
-from ftp_eval.analysis.structure import (
+from ftp_eval.proving.analysis.structure import (
     aggregate_structure,
     analyze_proof,
-    distribution,
     sample_duplication,
 )
-from ftp_eval.analysis.tactics import tactic_stats
+from ftp_eval.proving.analysis.tactics import tactic_stats
+from ftp_eval.stats import distribution
 
 PROOF = """\
 by
@@ -358,7 +358,7 @@ def test_transitions_appear_in_the_report():
 
 
 def test_counts_binders_by_kind():
-    from ftp_eval.analysis.structure import analyze_statement
+    from ftp_eval.autoformalization.complexity import analyze_statement
 
     c = analyze_statement(
         "theorem t {α : Type} [Ring α] (x : α) (h : 0 < x) : x + 0 = x := by"
@@ -371,7 +371,7 @@ def test_counts_binders_by_kind():
 
 
 def test_counts_quantifiers_and_connectives():
-    from ftp_eval.analysis.structure import analyze_statement
+    from ftp_eval.autoformalization.complexity import analyze_statement
 
     c = analyze_statement("theorem t : ∀ n, n = 0 ∨ 0 < n := by")
     assert c.quantifiers == 1
@@ -379,7 +379,7 @@ def test_counts_quantifiers_and_connectives():
 
 
 def test_measures_the_conclusion_separately_from_the_binders():
-    from ftp_eval.analysis.structure import analyze_statement
+    from ftp_eval.autoformalization.complexity import analyze_statement
 
     simple = analyze_statement("theorem t (n : Nat) : n = n := by")
     complex_ = analyze_statement(
@@ -389,7 +389,7 @@ def test_measures_the_conclusion_separately_from_the_binders():
 
 
 def test_statement_complexity_survives_an_unparseable_statement():
-    from ftp_eval.analysis.structure import analyze_statement
+    from ftp_eval.autoformalization.complexity import analyze_statement
 
     # Token and quantifier counts should still come through rather than
     # the whole measurement returning nothing.
@@ -415,7 +415,7 @@ def test_statement_complexity_travels_with_the_result():
 
 
 def test_point_biserial_detects_a_clean_relationship():
-    from ftp_eval.analysis.structure import point_biserial
+    from ftp_eval.stats import point_biserial
 
     values = [1, 2, 3, 10, 11, 12]
     outcomes = [True, True, True, False, False, False]
@@ -425,7 +425,7 @@ def test_point_biserial_detects_a_clean_relationship():
 
 
 def test_point_biserial_is_none_when_undefined():
-    from ftp_eval.analysis.structure import point_biserial
+    from ftp_eval.stats import point_biserial
 
     assert point_biserial([1, 2], [True, False]) is None          # too few points
     assert point_biserial([5, 5, 5], [True, False, True]) is None  # no variation
@@ -433,14 +433,14 @@ def test_point_biserial_is_none_when_undefined():
 
 
 def test_point_biserial_rejects_mismatched_lengths():
-    from ftp_eval.analysis.structure import point_biserial
+    from ftp_eval.stats import point_biserial
 
     with pytest.raises(ValueError):
         point_biserial([1, 2, 3], [True, False])
 
 
 def test_correlations_are_ranked_by_magnitude():
-    from ftp_eval.analysis.structure import correlate_with_success
+    from ftp_eval.stats import correlate_with_success
 
     entries = []
     for i in range(20):
@@ -448,7 +448,7 @@ def test_correlations_are_ranked_by_magnitude():
         entries.append(
             ({"lines": 2 if verified else 40, "cited_lemmas": 3}, verified)
         )
-    correlations = correlate_with_success(entries)
+    correlations = correlate_with_success(entries, fields=("lines", "cited_lemmas"))
     assert correlations
     assert correlations[0].metric == "lines"
     assert correlations[0].strength == "strong"
@@ -457,16 +457,16 @@ def test_correlations_are_ranked_by_magnitude():
 
 
 def test_correlation_report_states_the_causation_caveat():
-    from ftp_eval.analysis.structure import correlate_with_success, format_correlations
+    from ftp_eval.stats import correlate_with_success, format_correlations
 
     entries = [({"lines": 2 if i < 6 else 40}, i < 6) for i in range(12)]
-    text = format_correlations(correlate_with_success(entries))
+    text = format_correlations(correlate_with_success(entries, fields=("lines", "cited_lemmas")))
     assert "NOT causation" in text
     assert "task difficulty" in text
 
 
 def test_empty_correlations_say_so():
-    from ftp_eval.analysis.structure import format_correlations
+    from ftp_eval.stats import format_correlations
 
     assert "none above" in format_correlations([])
 

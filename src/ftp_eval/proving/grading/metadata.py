@@ -41,7 +41,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Mapping
 
-from ..formalizing.lean_file import parse_lean_file
+from ..lean_file import parse_lean_file
 
 __all__ = [
     "ProblemMetadata",

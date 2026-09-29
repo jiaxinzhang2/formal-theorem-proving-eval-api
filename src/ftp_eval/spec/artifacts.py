@@ -18,7 +18,7 @@ __all__ = ["ArtifactWriter"]
 class ArtifactWriter(abc.ABC):
     """Records a grading run.
 
-    Implemented by :class:`~ftp_eval.grading.artifacts.RunDirectory`, which
+    Implemented by :class:`~ftp_eval.proving.grading.artifacts.RunDirectory`, which
     writes the folder layout documented in that module.
     """
 

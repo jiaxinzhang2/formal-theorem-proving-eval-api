@@ -37,7 +37,7 @@ The four contracts
 :class:`~ftp_eval.spec.benchmark.Benchmark`
     What a problem set provides: ids, sources, per-problem metadata, a
     manifest. Implemented by
-    :class:`~ftp_eval.grading.sources.DirectoryBenchmark` -- a folder of
+    :class:`~ftp_eval.proving.grading.sources.DirectoryBenchmark` -- a folder of
     Lean files, one theorem per file. Anything else that can answer those
     questions works too.
 
@@ -53,7 +53,7 @@ The four contracts
 
 :class:`~ftp_eval.spec.artifacts.ArtifactWriter`
     Where conclusions go. Implemented by
-    :class:`~ftp_eval.grading.artifacts.RunDirectory`.
+    :class:`~ftp_eval.proving.grading.artifacts.RunDirectory`.
 
 --------------------------------------------------------------------------
 Two rules the contracts encode

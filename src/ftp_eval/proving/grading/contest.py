@@ -2,8 +2,8 @@
 
 Loads the problem set and the submissions, runs every answer through the
 three stages, and writes one results directory. See
-:mod:`ftp_eval.grading` for the stage diagram and
-:mod:`ftp_eval.grading.artifacts` for the directory layout.
+:mod:`ftp_eval.proving.grading` for the stage diagram and
+:mod:`ftp_eval.proving.grading.artifacts` for the directory layout.
 
 Three things this is built to get right, because a contest grader is
 adversarial in a way an internal eval is not:
@@ -25,7 +25,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
 
-from ..formalizing.matching import MatchStatus, match_submission
+from ..matching import MatchStatus, match_submission
 from .artifacts import RunDirectory
 
 from .metadata import (
@@ -36,7 +36,7 @@ from .metadata import (
     parse_problem_metadata,
     reconcile_toolchain,
 )
-from ..spec.stage import StageContext, StageId
+from ...spec.stage import StageContext, StageId
 from .pipeline import run_stages
 from .stages import GradedAnswer, Stage, StageStatus
 from .statistics import ContestStatistics, summarize_contest
@@ -320,7 +320,7 @@ def grade_answer(
     """
     # Driven through the stage objects rather than inline, so there is one
     # code path and the ordering lives in each stage's `requires` rather
-    # than here. See ftp_eval.grading.pipeline.
+    # than here. See ftp_eval.proving.grading.pipeline.
     context = StageContext(
         problem_id=problem_id,
         problem_source=problem_source,

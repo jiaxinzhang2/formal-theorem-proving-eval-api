@@ -27,8 +27,8 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Any
 
-from ..formalizing.matching import SubmissionMatcher
-from ..types import StatementTask, Status
+from ..matching import SubmissionMatcher
+from ...types import StatementTask, Status
 from .stages import StageStatus
 
 __all__ = ["CompileMode", "CompileOutcome", "compile_answer", "compile_standalone"]

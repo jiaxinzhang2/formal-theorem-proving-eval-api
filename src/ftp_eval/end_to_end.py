@@ -20,7 +20,7 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Iterator, Sequence
 
-from .formalizing.checker import StatementChecker
+from .autoformalization.checker import StatementChecker
 from .types import (
     ProofAttempt,
     StatementStatus,

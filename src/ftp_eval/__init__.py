@@ -57,9 +57,9 @@ from .dataset import (
     read_jsonl,
     write_jsonl,
 )
-from .formalizing.judge import ConsensusJudge, Judge, JudgeError, MockJudge
-from .analysis.scoring import Summary, estimate_pass_at_k, pass_at_k, summarize
-from .analysis.modes import (
+from .autoformalization.judge import ConsensusJudge, Judge, JudgeError, MockJudge
+from .proving.analysis.scoring import Summary, estimate_pass_at_k, pass_at_k, summarize
+from .proving.analysis.modes import (
     Attribution,
     FailureMode,
     SuccessMode,
@@ -68,14 +68,9 @@ from .analysis.modes import (
     looks_truncated,
 )
 from .end_to_end import EndToEndResult, EndToEndRunner, EndToEndStatus
-from .analysis.structure import (
-    Correlation,
-    ProofStructure,
-    StatementComplexity,
-    analyze_proof,
-    analyze_statement,
-    correlate_with_success,
-)
+from .autoformalization.complexity import StatementComplexity, analyze_statement
+from .proving.analysis.structure import ProofStructure, analyze_proof
+from .stats import Correlation, correlate_with_success
 from .registry import (
     available,
     available_judges,
@@ -86,8 +81,8 @@ from .registry import (
 )
 from .proving.runner import EvalRunner, ProgressEvent, ResultCache, RunConfig
 from .soundness import HackClass, audit_axioms, screen_source
-from .formalizing.checker import StatementChecker
-from .analysis.tactics import extract_tactics
+from .autoformalization.checker import StatementChecker
+from .proving.analysis.tactics import extract_tactics
 from .types import (
     Assembly,
     BackendInfo,

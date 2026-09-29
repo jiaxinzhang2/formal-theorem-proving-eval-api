@@ -6,21 +6,21 @@ three stages in order, and each one answers a different question::
     answer.lean
         │
         │  ① MATCH      does it state the theorem that was set?
-        │               ftp_eval.formalizing.matching
+        │               ftp_eval.proving.matching
         │               text only, no prover, milliseconds
         ▼
     the right theorem, with a proof attached
         │
         │  ② COMPILE    does the prover accept that proof --
         │               of the THEOREM's proposition, not the answer's?
-        │               ftp_eval.grading.compiling -> ftp_eval.proving
+        │               ftp_eval.proving.grading.compiling -> ftp_eval.proving
         │               one Lean compile per answer
         ▼
     a verdict per answer
         │
         │  ③ REPORT     what happened, across every answer,
         │               correct and incorrect alike
-        │               ftp_eval.grading.statistics -> ftp_eval.analysis
+        │               ftp_eval.proving.grading.statistics -> ftp_eval.proving.analysis
         ▼
     scores, failure modes, per-problem difficulty
 
@@ -39,9 +39,9 @@ could not tell you either.
 
 Entry points:
 
-* :func:`~ftp_eval.grading.contest.grade_contest` -- N problems, many
+* :func:`~ftp_eval.proving.grading.contest.grade_contest` -- N problems, many
   participants, the whole pipeline.
-* :class:`~ftp_eval.grading.stages.GradedAnswer` -- one answer's trip
+* :class:`~ftp_eval.proving.grading.stages.GradedAnswer` -- one answer's trip
   through all three.
 """
 

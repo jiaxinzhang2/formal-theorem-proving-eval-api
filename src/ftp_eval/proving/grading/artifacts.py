@@ -122,7 +122,7 @@ class RunDirectory:
         * **Per-problem provenance**, including the MathDB number, so a
           disputed problem can be traced to its source.
         """
-        from .. import __version__
+        from ... import __version__
 
         manifest: dict[str, Any] = {
             "run_id": self.root.name,

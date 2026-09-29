@@ -13,9 +13,10 @@ import abc
 import time
 from typing import Any, Mapping, Sequence
 
-from ..analysis.modes import classify_failure, classify_success
-from ..analysis.structure import analyze_proof, analyze_statement
-from ..analysis.tactics import extract_tactics
+from .analysis.modes import classify_failure, classify_success
+from ..autoformalization.complexity import analyze_statement
+from .analysis.structure import analyze_proof
+from .analysis.tactics import extract_tactics
 from ..soundness import screen_source
 from ..types import (
     Assembly,

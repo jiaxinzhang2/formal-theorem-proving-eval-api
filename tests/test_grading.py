@@ -13,13 +13,13 @@ import json
 
 import pytest
 
-from ftp_eval.grading import grade_contest, load_problem_set, load_submissions
-from ftp_eval.grading.metadata import (
+from ftp_eval.proving.grading import grade_contest, load_problem_set, load_submissions
+from ftp_eval.proving.grading.metadata import (
     BenchmarkManifest,
     parse_problem_metadata,
     reconcile_toolchain,
 )
-from ftp_eval.grading.pipeline import STAGES, CompileStage, MatchStage, run_stages
+from ftp_eval.proving.grading.pipeline import STAGES, CompileStage, MatchStage, run_stages
 from ftp_eval.spec import StageContext, StageId, StageStatus
 
 PROBLEM = """\

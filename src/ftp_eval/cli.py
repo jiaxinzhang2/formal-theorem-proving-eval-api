@@ -22,13 +22,13 @@ from typing import Any, Sequence
 
 from . import __version__
 from .dataset import load_attempts, load_results, load_tasks, load_triplets, write_jsonl
-from .analysis.scoring import compare as compare_summaries, summarize
+from .proving.analysis.scoring import compare as compare_summaries, summarize
 from .end_to_end import EndToEndRunner, EndToEndStatus, format_end_to_end
 from .registry import available, available_judges, create, create_judge
 from .proving.runner import EvalRunner, ProgressEvent, RunConfig
-from .formalizing.checker import StatementChecker, format_statement_summary
-from .formalizing.matching import SubmissionMatcher, match_submission
-from .grading import grade_contest, load_problem_set, load_submissions
+from .autoformalization.checker import StatementChecker, format_statement_summary
+from .proving.matching import SubmissionMatcher, match_submission
+from .proving.grading import grade_contest, load_problem_set, load_submissions
 from .types import ProofAttempt, ProofTask, StatementStatus, Status
 from .proving.verifier import assemble_source, screen_soundness
 

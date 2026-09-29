@@ -119,8 +119,8 @@ def available() -> Iterator[str]:
 _JUDGES: dict[str, Callable[..., Any]] = {}
 
 _BUILTIN_JUDGES: dict[str, tuple[str, str]] = {
-    "mock": ("ftp_eval.formalizing.judge", "MockJudge"),
-    "claude": ("ftp_eval.formalizing.judges.claude", "ClaudeJudge"),
+    "mock": ("ftp_eval.autoformalization.judge", "MockJudge"),
+    "claude": ("ftp_eval.autoformalization.judges.claude", "ClaudeJudge"),
 }
 
 
@@ -134,7 +134,7 @@ def create_judge(name: str, *, consensus: int = 1, recheck: int = 2, **config: A
     """Instantiate a judge, optionally wrapped in consensus voting.
 
     ``consensus > 1`` wraps it in
-    :class:`~ftp_eval.formalizing.judge.ConsensusJudge`, which votes across samples
+    :class:`~ftp_eval.autoformalization.judge.ConsensusJudge`, which votes across samples
     and re-examines its own rejections before letting one stand.
     """
     if name in _JUDGES:
@@ -152,7 +152,7 @@ def create_judge(name: str, *, consensus: int = 1, recheck: int = 2, **config: A
 
     judge = factory(**config)
     if consensus > 1:
-        from .formalizing.judge import ConsensusJudge
+        from .autoformalization.judge import ConsensusJudge
 
         return ConsensusJudge(judge, samples=consensus, recheck_rejections=recheck)
     return judge

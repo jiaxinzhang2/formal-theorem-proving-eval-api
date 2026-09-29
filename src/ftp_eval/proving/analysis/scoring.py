@@ -27,20 +27,23 @@ from .modes import (
     aggregate_failure_modes,
     aggregate_success_modes,
 )
-from .structure import (
+from ...stats import (
     Correlation,
     Distribution,
-    SampleDuplication,
-    StructureStats,
-    aggregate_structure,
     correlate_with_success,
     distribution,
     format_correlations,
+)
+from .structure import (
+    NUMERIC_FIELDS,
+    SampleDuplication,
+    StructureStats,
+    aggregate_structure,
     sample_duplication,
 )
-from ..soundness import parse_label
+from ...soundness import parse_label
 from .tactics import TacticStats, tactic_stats
-from ..types import ErrorKind, Status, VerificationResult
+from ...types import ErrorKind, Status, VerificationResult
 
 __all__ = ["pass_at_k", "estimate_pass_at_k", "TaskOutcome", "Summary", "summarize", "compare"]
 
@@ -576,7 +579,7 @@ def summarize(
     }
     summary.failure_modes = aggregate_failure_modes(failure_entries)
     summary.success_modes = aggregate_success_modes(success_entries)
-    summary.correlations = correlate_with_success(correlation_entries)
+    summary.correlations = correlate_with_success(correlation_entries, fields=NUMERIC_FIELDS)
     # sample_index is 0-based; "samples drawn" is one more than that.
     summary.samples_to_first_success = distribution(
         [index + 1 for index in first_success.values()]
