@@ -216,12 +216,30 @@ ftp-eval audit --problems benchmarks/my-2026/problems \
   -b lean4 --judge claude --judge-samples 3 --yes
 ```
 
-It checks that each statement elaborates, is not closable by `trivial`, has
-no contradictory hypotheses, assumes nothing it should prove — and, where
-the problem records `prose:`, that an LLM judge finds the formalization
-faithful. Problems with no `prose:` are reported as unjudged rather than
-passed, and the judge is not called for them at all: judging against
-nothing spends money to learn nothing.
+**Only one of its checks can confirm a problem; the rest can only refuse
+one.** Worth being blunt about, because it decides whether `audit` is
+useful to you:
+
+| check | who decides | can it say *yes*? |
+|---|---|---|
+assumes nothing it should prove | text only | no — refuse only |
+elaborates | the prover | no — refuse only |
+not closable by `trivial` | the prover | no — refuse only |
+no contradictory hypotheses | the prover | no — refuse only |
+**faithful to the prose** | **an LLM judge** | **yes** |
+iff-equivalent to a reference | the prover | yes, if you wrote a reference |
+
+A statement can pass all four screens and still formalize a problem nobody
+asked about, so passing them yields `inconclusive`, never `ok`. This is the
+real asymmetry with grading: there the kernel is ground truth and no model
+is involved. Here **there is no ground truth** — "does this Lean say what
+that English says" is not a question a prover can be asked — so the only
+affirmative answer comes from a judge that can be wrong. Everything under
+[Judges](#judges) exists because of that.
+
+Problems with no `prose:` are reported as unjudged rather than passed, and
+the judge is not called for them at all: judging against nothing spends
+money to learn nothing.
 
 ## Install
 

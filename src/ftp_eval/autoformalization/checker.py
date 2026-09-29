@@ -10,11 +10,36 @@ links to check, and they fail in opposite directions:
   to any amount of proof checking.
 * A **right formalization with no proof** is an honest miss.
 
-``StatementChecker`` handles the first. It combines what the prover can
-decide (does it elaborate, is it trivially closable, are the hypotheses
-contradictory, does it match a reference) with what only a judge can
-assess (does it mean the same thing as the prose), and keeps the two kinds
-of evidence distinct in the result.
+``StatementChecker`` handles the first, and it is worth being blunt about
+how: **only faithfulness can confirm a statement.** The six checks do not
+have equal powers.
+
+Four of them are *screens*. They can refuse a statement and they can never
+accept one::
+
+    no_placeholder    does it assume what it should prove?     text only
+    elaborates        does it typecheck at all?                the prover
+    non_trivial       can `trivial`/`simp`/`decide` close it?   the prover
+    non_vacuous       are the hypotheses contradictory?        the prover
+
+Every one of those is a question about the Lean, not about the problem. A
+statement can pass all four and still formalize something nobody asked
+about -- so passing them yields ``INCONCLUSIVE``, not ``OK``. See
+``_status``: the only checks that can produce ``OK`` are
+
+    judge_faithful    does it mean what the prose says?        an LLM
+    gold_equivalent   is it iff-equivalent to a reference?     the prover
+
+and ``gold_equivalent`` only relocates the trust, to whoever wrote the
+gold statement.
+
+That is the real asymmetry between this API and ``proving/``. There, the
+kernel is ground truth and no model is needed. Here **there is no ground
+truth**: "does this Lean say what that English says" is not a question a
+prover can be asked, so the affirmative answer comes from a judge that can
+be wrong. Everything in ``judge.py`` -- abstention as a real answer,
+rechecking rejections, keeping every sample's label, never turning an
+outage into a rejection -- exists because of that one fact.
 """
 
 from __future__ import annotations
