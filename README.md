@@ -113,7 +113,7 @@ ftp_eval/
 │
 ├── types.py         the vocabulary every layer speaks   ─┐
 ├── soundness.py     reward-hacking detection             │ shared by
-├── source.py        comment stripping, tokenization      │ all three
+├── comments.py      what counts as a comment, per language │ all three
 ├── dataset.py       JSONL I/O, the three-file layout     │ layers
 ├── registry.py      backend and judge lookup by name    ─┘
 └── cli.py

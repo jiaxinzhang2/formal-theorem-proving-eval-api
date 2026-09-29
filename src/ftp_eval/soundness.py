@@ -34,7 +34,7 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Iterable, Sequence
 
-from .source import strip_comments
+from .comments import strip_comments
 from .types import SoundnessReport
 
 __all__ = [

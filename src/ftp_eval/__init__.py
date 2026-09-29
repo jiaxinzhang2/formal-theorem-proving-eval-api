@@ -28,7 +28,7 @@ Shared by all three layers, which is why they sit at the top level:
 
     types.py       the vocabulary every layer speaks
     soundness.py   reward-hacking detection
-    source.py      comment stripping and tokenization
+    comments.py    what counts as a comment, per language
     dataset.py     JSONL I/O and the three-file layout
     registry.py    backend and judge lookup by name
 

@@ -24,7 +24,7 @@ from collections import Counter
 from dataclasses import dataclass, field
 from typing import Any, Iterable, Mapping, Sequence
 
-from ..source import strip_comments
+from ..comments import strip_comments
 
 __all__ = [
     "extract_tactics",

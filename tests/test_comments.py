@@ -1,0 +1,110 @@
+"""Comment stripping, which every layer depends on being exactly right.
+
+Both directions matter: a comment that *mentions* a hack token must not
+fail an honest proof, and a hack token *hidden inside* a comment must not
+pass a dishonest one. Everything downstream -- the reward-hacking screen,
+tactic extraction, every structural metric -- is computed on the stripped
+text, so a bug here is a bug everywhere at once.
+"""
+
+from __future__ import annotations
+
+import pytest
+
+from ftp_eval.comments import COMMENT_SYNTAX, strip_comments
+
+
+# -- both directions ---------------------------------------------------
+
+
+def test_a_comment_mentioning_sorry_is_removed():
+    assert "sorry" not in strip_comments("simp -- no sorry needed", "lean4")
+
+
+def test_a_sorry_hidden_in_a_block_comment_is_removed():
+    assert "sorry" not in strip_comments("simp /- sorry -/", "lean4")
+
+
+def test_code_outside_comments_survives():
+    assert "nlinarith" in strip_comments("nlinarith /- hint -/ [sq_nonneg n]", "lean4")
+
+
+# -- the two claims the docstring makes --------------------------------
+
+
+def test_comments_become_whitespace_not_nothing():
+    """Otherwise stripping could glue two tokens into a different one.
+
+    `simp/- x -/[foo]` collapsing to `simp[foo]` would change what the
+    text means, and every downstream tokenizer would see the wrong thing.
+    """
+    stripped = strip_comments("simp/- x -/[foo]", "lean4")
+    assert "simp[foo]" not in stripped
+    assert stripped.split() == ["simp", "[foo]"]
+
+
+def test_block_comments_are_stripped_before_line_comments():
+    """A `--` inside a block comment must not eat the block's terminator.
+
+    If the line-comment rule ran first, `/- -- -/` would lose its closing
+    `-/` to the line comment and leave a dangling `/-`, so every later
+    check would see a mangled body.
+    """
+    stripped = strip_comments("theorem t /- -- -/ : True := trivial", "lean4")
+    assert "/-" not in stripped
+    assert "-/" not in stripped
+    assert "theorem t" in stripped
+    assert "trivial" in stripped
+
+
+# -- per language ------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "language,source,removed",
+    [
+        ("lean4", "x -- gone\ny", "gone"),
+        ("lean4", "x /- gone -/ y", "gone"),
+        ("lean3", "x -- gone", "gone"),
+        ("coq", "x (* gone *) y", "gone"),
+        ("isabelle", "x (* gone *) y", "gone"),
+    ],
+)
+def test_each_language_syntax(language, source, removed):
+    assert removed not in strip_comments(source, language)
+
+
+def test_an_unknown_language_is_returned_unchanged():
+    # Guessing at comment syntax would be worse than not stripping: it
+    # could delete real code.
+    source = "x (* not necessarily a comment here *) y"
+    assert strip_comments(source, "agda") == source
+
+
+def test_multiline_block_comments_are_handled():
+    source = "theorem t\n/- line one\n   line two\n   sorry -/\n:= trivial"
+    stripped = strip_comments(source, "lean4")
+    assert "sorry" not in stripped
+    assert "trivial" in stripped
+
+
+def test_nested_looking_block_comments_stop_at_the_first_terminator():
+    # Lean's real block comments nest; this strips non-greedily and so
+    # stops at the first `-/`. Documented rather than claimed otherwise:
+    # the tail is left as code, which is the fail-loud direction -- a
+    # leftover `sorry` gets flagged rather than silently dropped.
+    stripped = strip_comments("/- outer /- inner -/ sorry -/", "lean4")
+    assert "sorry" in stripped
+
+
+def test_every_declared_language_has_at_least_one_rule():
+    assert COMMENT_SYNTAX
+    for language, rules in COMMENT_SYNTAX.items():
+        assert rules, "%s declares no comment syntax" % language
+        for pattern, replacement in rules:
+            assert isinstance(pattern, str)
+            assert replacement == " ", "replacements must be whitespace, not empty"
+
+
+def test_empty_input():
+    assert strip_comments("", "lean4") == ""
