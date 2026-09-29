@@ -340,10 +340,11 @@ def check_arguments(
     compares, on definitional equality, and nothing has to decide whether
     ``4`` and ``(2 + 2)`` are the same string.
 
-    When it does not -- an open conjecture, where the setter does not know
-    the answer either -- the answer's own value is used, and the caller must
-    record that the verdict is "proved the proposition it claimed", which is
-    a weaker statement than "answered the question".
+    Without gold, the trusted Goal freezes an existential over Target's
+    parameters. Check.lean infers the witness from Submission.solution;
+    the returned submitted arguments are for reporting only. This fully
+    validates construction tasks with multiple or infinitely many valid
+    answers. ``against_gold=False`` records that no fixed value was required.
     """
     if problem.gold_arguments:
         return problem.gold_arguments, True

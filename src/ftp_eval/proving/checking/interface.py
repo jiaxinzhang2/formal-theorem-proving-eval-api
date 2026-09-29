@@ -61,11 +61,10 @@ class InterfaceFault(str, Enum):
 class InterfaceProblem:
     """The sealed side: a module name, and the target's arity.
 
-    ``target_arguments`` is what an answer must supply, in order. Empty for
-    a plain "prove this" problem; one entry for a problem that asks for a
-    value, which is how ``answer(...)`` is expressed here -- the value lands
-    in ``solution``'s *type*, so the kernel checks it and the report can read
-    it off.
+    ``target_parameters`` records the names of Target's binders. Empty for
+    a proof task; a witness task takes a Lean value, which can be an object,
+    function or predicate. The witness appears in ``solution``'s type.
+    ``Submission.answer`` is an optional helper, not a second interface.
     """
 
     problem_id: str
@@ -147,8 +146,8 @@ class InterfaceVerdict:
     build: "ModuleBuild | None" = None
     #: Stage 3: what does the proof actually depend on?
     axiom_audit: "SoundnessReport | None" = None
-    #: Whether the target was pinned to the benchmark's gold value. When
-    #: false the verdict is the weaker "proved the proposition it claimed".
+    #: True for a fixed proposition or a goal pinned to gold arguments.
+    #: False for a verified witness of the frozen Target predicate.
     against_gold: bool = False
     stages: list[dict[str, Any]] = field(default_factory=list)
 
@@ -202,7 +201,7 @@ class InterfaceVerdict:
 
     def format_text(self) -> str:
         if self.solved:
-            note = "" if self.against_gold else "  (value self-declared, not gold)"
+            note = "" if self.against_gold else "  (verified witness; no fixed gold)"
             return "SOLVED   %-14s%s" % (self.problem_id[:14], note)
         if not self.kernel_checked and self.report is not None and self.report.ok:
             return "NOT RUN  %-14s  the prover was not asked, so nothing was proved" % (

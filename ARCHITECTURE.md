@@ -70,7 +70,11 @@ src/ftp_eval/
       tactics.py          tactic extraction and usage summaries
       proof_structure.py  proof shape and repetition measurements
       statement_metrics.py proposition complexity measurements
-  autoformalization/      faithfulness judges, voting, verdicts
+  autoformalization/
+    checker.py          check a formalization against the problem it came from
+    judge.py            the judge contract and multi-judge voting
+    judges/claude.py    faithfulness judge backed by the Claude API
+    types.py            this API's verdicts and per-judge reports
 ```
 
 `checking` decides whether a proof satisfies the frozen target. Its evaluator

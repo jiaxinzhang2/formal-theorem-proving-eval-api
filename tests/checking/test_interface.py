@@ -198,12 +198,8 @@ def test_the_check_is_built_against_the_gold_value_when_there_is_one():
     assert "Problem.Target (4)" not in check
 
 
-def test_without_a_gold_value_the_answers_own_claim_is_used_and_flagged():
-    """An open conjecture: the setter does not know the answer either.
-
-    The verdict is then the weaker "proved the proposition it declared", and
-    the report has to say so rather than implying the question was answered.
-    """
+def test_without_gold_the_witness_is_reported_without_a_fixed_value():
+    """The frozen predicate, rather than a canonical witness, defines validity."""
     open_problem = problem()
     report = check_interface(open_problem, ANSWER, allowed_imports=["Mathlib"])
     arguments, against_gold = check_arguments(open_problem, report)

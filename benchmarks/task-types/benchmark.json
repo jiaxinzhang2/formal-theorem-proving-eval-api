@@ -1,0 +1,17 @@
+{
+  "name": "unified-target-task-types",
+  "version": "1.0.0",
+  "description": "Binary-tree invariants, normal magic squares, bounded Bezout certificates and a complete Chinese-remainder solution set through one frozen Target interface.",
+  "problems": {
+    "P001": {"module": "FtpEvalBench.P001"},
+    "P002": {"module": "FtpEvalBench.P002"},
+    "P003": {"module": "FtpEvalBench.P003"},
+    "P004": {"module": "FtpEvalBench.P004"}
+  },
+  "policy": {
+    "allowed_imports": ["Init", "Std"],
+    "allowed_axioms": ["propext", "Classical.choice", "Quot.sound"],
+    "allow_global_instances": true,
+    "isolate_builds": true
+  }
+}

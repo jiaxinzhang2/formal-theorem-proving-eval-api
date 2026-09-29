@@ -42,6 +42,7 @@ from .types import (
 )
 
 from .lean_diagnostics import classify_lean_message, parse_lean_log, parse_printed_axioms
+from .comments import strip_comments
 from .soundness import audit_axioms
 from .verifier import BackendUnavailable, RawVerdict, Verifier, VerifierError
 
@@ -401,10 +402,10 @@ class Lean4Verifier(Verifier):
         option = "set_option maxHeartbeats %d" % self.max_heartbeats
         lines = source.splitlines()
         insert_at = 0
-        for i, line in enumerate(lines):
+        for i, line in enumerate(strip_comments(source, "lean4").splitlines()):
             stripped = line.strip()
-            if stripped.startswith("import ") or not stripped or stripped.startswith("--"):
-                if stripped.startswith("import "):
+            if stripped.startswith("import ") or stripped == "prelude" or not stripped:
+                if stripped:
                     insert_at = i + 1
                 continue
             break

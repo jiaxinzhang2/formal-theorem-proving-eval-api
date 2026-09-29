@@ -4,7 +4,9 @@ A Lean 4 evaluation framework for theorem-proving models, with **frozen targets*
 proof verification, and reproducible run records.
 The benchmark compiles `Problem.Target` first. An answer imports that module,
 develops any helpers it needs, and exports `Submission.solution : Problem.Target`.
-A trusted Goal module freezes gold arguments before the answer is imported.
+A witness task uses `Submission.solution : Problem.Target value`; the value can
+be an object, dependent function or predicate. A trusted Goal module freezes
+gold arguments or an existential witness goal before the answer is imported.
 A generated check module checks the resulting constant and audits its axiom closure.
 
 Only a successful kernel check **and** a clean axiom audit count as solved.
@@ -43,7 +45,7 @@ Lean grading additionally requires a configured, built Lake project.
 ```lean
 -- FtpEvalBench/P001.lean: trusted, compiled before any answer
 namespace Problem
-abbrev Target (n : Nat) : Prop := n = 1
+abbrev Target (n : Nat) : Prop := n % 7 = 3 ∧ n % 11 = 5
 end Problem
 ```
 
@@ -51,9 +53,8 @@ end Problem
 -- The answer may freely organize definitions, lemmas and instances.
 import FtpEvalBench.P001
 namespace Submission
-def value : Nat := 1
-theorem helper : value = 1 := rfl
-theorem solution : Problem.Target value := helper
+def value : Nat := 38
+theorem solution : Problem.Target value := by decide
 end Submission
 ```
 
@@ -64,6 +65,11 @@ never compared against the problem's declarations. See
 `abbrev Target` is recommended for tactic transparency. For a `def Target`,
 `omega` and similar tactics may need `unfold Problem.Target` first; see the
 [benchmark convention](benchmarks/README.md).
+Proof tasks and construction tasks share this interface. See the
+[mathematical examples](benchmarks/README.md#mathematical-examples) for binary-tree
+induction, magic squares, dependent Bézout certificates and a complete infinite
+solution set. A witness task needs no gold value when any valid construction
+answers the question.
 
 ## Grade a benchmark
 
@@ -146,10 +152,11 @@ mypy
 python scripts/measure_metrics_speed.py --check
 ```
 
-Tests use synthetic module-build responses to exercise the grading and persistence
-contracts without Lean. A passing Python suite does not establish that a real
-Lean toolchain compiled the examples. The performance script measures Python
-analysis and grading overhead; it does not benchmark real Lean compilation.
+The default tests use synthetic module-build responses to exercise grading and
+persistence without Lean. Opt-in [integration tests](tests/README.md) compile
+the mathematical examples in real Lean and check dependent functions in Docker
+with fresh kernel replay. The performance script measures Python analysis and
+grading overhead; it does not benchmark real Lean compilation.
 
 ## Repository map
 

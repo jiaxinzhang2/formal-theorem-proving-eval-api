@@ -7,6 +7,20 @@ import pytest
 from ftp_eval.backends.lean4 import Lean4Verifier
 from ftp_eval.backends.types import BackendInfo, ModuleBuild, ModuleSource, Status
 
+
+@pytest.mark.parametrize("header", [
+    "/- provenance\n /- nested -/\n-/\n",
+    "-- provenance\n\n",
+    "prelude\n/- metadata -/\n",
+])
+def test_resource_options_follow_imports_after_metadata(tmp_path, header):
+    verifier = Lean4Verifier(project_dir=tmp_path)
+    source = header + "import Std\n/- between imports -/\nimport Init\nnamespace Problem\nend Problem\n"
+    capped = verifier._with_options(source)
+    assert capped.index("set_option maxHeartbeats") > capped.index("import Init")
+    assert capped.index("set_option maxHeartbeats") < capped.index("namespace Problem")
+    assert capped.startswith(header)
+
 def backend(tmp_path, monkeypatch):
     verifier = Lean4Verifier(project_dir=tmp_path)
     monkeypatch.setattr(verifier, "info", lambda: BackendInfo("lean4", "lean4", True))

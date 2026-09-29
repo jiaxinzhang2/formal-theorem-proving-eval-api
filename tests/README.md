@@ -10,6 +10,27 @@ python scripts/measure_metrics_speed.py --check
 The Python suite does not require Lean. Simulated module-build responses exercise
 control flow and persistence; they are not real kernel verification.
 
+`checking/test_task_types.py` also has opt-in integration tests. With Lean/Lake
+on PATH, set `FTP_EVAL_LEAN_PROJECT` to a built Std-capable project and run:
+
+```bash
+FTP_EVAL_LEAN_PROJECT=/path/to/project pytest tests/checking/test_task_types.py -k real_lean
+```
+
+`FTP_EVAL_LAKE` can select an explicit Lake executable. This compiles all ten
+published task-type answers: six valid proofs/witnesses and four refusals.
+For a trusted Linux supervisor with Docker, use an immutable organizer image:
+
+```bash
+FTP_EVAL_DOCKER_IMAGE=sha256:IMAGE_ID pytest tests/checking/test_task_types.py -k real_docker
+```
+
+That test checks a dependent function through strict environment preflight,
+fresh kernel replay and axiom auditing, and rejects a wrong proof at the kernel.
+It derives pins from the image only for the integration test; official evaluation
+must declare its expected pins independently. Both tests skip when their
+environment variable is absent.
+
 - `checking/`: frozen interface, helpers, imports, syntax screening and Goal/Check generation.
 - `running/`: input groups, policies, environment pins, metrics, health probes,
   storage contracts, partial runs and durable checkpoints.
