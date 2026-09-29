@@ -155,7 +155,7 @@ def attempts_from_samples(
 
 
 def load_triplets(
-    informal_path: str | os.PathLike[str],
+    informal_path: str | os.PathLike[str] | None,
     formal_path: str | os.PathLike[str],
     proof_path: str | os.PathLike[str] | None = None,
     *,
@@ -170,8 +170,17 @@ def load_triplets(
 
     Returns statement tasks (problem + formalization, for
     :class:`~ftp_eval.statement.StatementChecker`) and proof attempts (for
-    the verifier). ``proof_path`` may be omitted to check formalizations
-    alone.
+    the verifier).
+
+    Both other files are optional, for the two common partial setups:
+
+    * ``proof_path=None`` -- audit formalizations without any proofs.
+    * ``informal_path=None`` -- the statements are **given** (the harness
+      supplies them, the model only writes proofs), so there is no prose
+      to check faithfulness against. The structural checks still apply,
+      and those are the ones that matter for a fixed task set: a vacuous
+      or trivially-true statement is now your dataset's bug, not the
+      model's, and worth finding once rather than per attempt.
 
     Recognized field names, in order of preference:
 
@@ -179,7 +188,7 @@ def load_triplets(
     * formal:   ``formal_statement``, ``formal``, ``statement``, ``theorem``
     * proof:    ``proof``, ``formal_proof``, ``completion``, ``output``
     """
-    informal = _index_by_id(informal_path, id_field, "informal")
+    informal = _index_by_id(informal_path, id_field, "informal") if informal_path else {}
     formal = _index_by_id(formal_path, id_field, "formal")
     proofs = _index_by_id(proof_path, id_field, "proof") if proof_path else {}
 
@@ -189,7 +198,10 @@ def load_triplets(
             "%s: %d problem(s) have no formalization (e.g. %s)"
             % (formal_path, len(missing_formal), ", ".join(missing_formal[:5]))
         )
-    orphan_formal = sorted(set(formal) - set(informal))
+    # Only worth warning about when prose was supplied at all: with
+    # `informal_path=None` the caller has said the statements are given and
+    # there is no prose by design, so the warning would be pure noise.
+    orphan_formal = sorted(set(formal) - set(informal)) if informal_path else []
     if orphan_formal:
         # Not fatal: a formalization without its prose can still be proof
         # checked, it just cannot be judged for faithfulness.

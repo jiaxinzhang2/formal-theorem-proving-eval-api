@@ -515,6 +515,36 @@ def test_load_triplets_rejects_a_missing_formalization(tmp_path):
         load_triplets(tmp_path / "nl.jsonl", tmp_path / "f.jsonl")
 
 
+def test_load_triplets_works_without_prose_for_given_statements(tmp_path, capsys):
+    """The statements-are-given case: audit them with no prose at all.
+
+    On a fixed task set, a vacuous or trivially-true statement is the
+    dataset's bug rather than the model's, and worth finding once over the
+    task set instead of per attempt. That must not require inventing
+    natural-language problems to sit next to it.
+    """
+    (tmp_path / "f.jsonl").write_text(
+        '{"task_id": "a", "formal_statement": "theorem a (n : Nat) : n = n := by"}\n'
+        '{"task_id": "b", "formal_statement": "theorem b : True := by"}\n',
+        encoding="utf-8",
+    )
+    tasks, attempts = load_triplets(None, tmp_path / "f.jsonl")
+    assert [t.task_id for t in tasks] == ["a", "b"]
+    assert all(t.informal_statement == "" for t in tasks)
+    assert attempts == []
+    # No orphan warning: there is no prose by design, not by mistake.
+    assert "no natural-language problem" not in capsys.readouterr().err
+
+
+def test_structural_checks_still_run_without_prose():
+    task = StatementTask(
+        task_id="t", informal_statement="", formal_statement="theorem t : True := by sorry"
+    )
+    verdict = StatementChecker().check(task)
+    assert verdict.status is StatementStatus.MALFORMED
+    assert not verdict.checked_faithfulness
+
+
 def test_statement_summary_warns_about_unassessed_faithfulness():
     verdicts = [StatementChecker().check(task())]
     assert "no faithfulness assessment" in format_statement_summary(verdicts)

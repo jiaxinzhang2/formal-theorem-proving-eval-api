@@ -285,6 +285,14 @@ def _build_checker(args: argparse.Namespace) -> tuple[Any, Any]:
 
 def cmd_check_statement(args: argparse.Namespace) -> int:
     verifier, judge = _build_checker(args)
+    if not args.informal and judge is not None:
+        print(
+            "note: no --informal supplied, so there is no prose to judge faithfulness "
+            "against; the judge will be skipped and only structural checks run",
+            file=sys.stderr,
+        )
+        judge.close()
+        judge = None
     tasks, _ = load_triplets(
         args.informal, args.formal, None, language=args.language or "lean4"
     )
@@ -554,7 +562,12 @@ def build_parser() -> argparse.ArgumentParser:
         "check-statement",
         help="check formalizations against their natural-language problems",
     )
-    p_check.add_argument("--informal", required=True, help="natural-language problems .jsonl")
+    p_check.add_argument(
+        "--informal",
+        help="natural-language problems .jsonl. Omit when the statements are GIVEN "
+        "(the harness supplies them): there is then no prose to judge faithfulness "
+        "against, and the structural checks run alone",
+    )
     p_check.add_argument("--formal", required=True, help="formal statements .jsonl")
     p_check.add_argument("-b", "--backend", default="lean4", help="prover for the probes")
     p_check.add_argument("-o", "--option", action="append", default=[], metavar="KEY=VALUE")

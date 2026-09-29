@@ -39,16 +39,57 @@ The Lean backend therefore also inspects the prover's own warnings
 the regex screen and catches `sorry` reaching the declaration through a
 lemma the regex never saw.
 
-## Statement tampering
+## When the statement is given
 
-Only checked when the model supplied the statement — `assembly` of
-`full_file` or `header_plus_proof`. The required `formal_statement` must
-appear in the source after normalization: comments stripped, whitespace
-collapsed, and the trailing `:=`/`:= by` seam cut, since that is where the
-proof begins rather than part of the claim.
+Under `continue_statement` the harness concatenates the statement and the
+model writes only the proof body. Two checks — statement tampering and
+definition shadowing — are switched off there, and that is not a gap:
 
-Under `continue_statement` the harness concatenates the statement itself,
-so tampering is impossible and the check is skipped rather than wasted.
+The statement's binders and goal are elaborated **in the same command** as
+the proof body, so nothing the model writes can alter them. Declarations
+it appends land *after* the theorem and cannot retroactively change what
+was proved. Running the checks anyway would only produce false flags on
+honest proofs that mention the statement's own names.
+
+Everything that lives *inside* the proof stays fully reachable and is
+still caught. Verified, not assumed —
+`test_in_body_hacks_are_still_caught_when_the_statement_is_given` runs each
+vector as a proof continuation:
+
+| reachable in the proof body | caught by |
+|---|---|
+`sorry`, including inside a `have` | `lean.sorry` |
+`sorryAx` cited directly | `lean.sorry_ax` |
+`admit` | `lean.admit` |
+`native_decide` | `lean.native_decide` |
+`set_option maxHeartbeats 0 in tac` | `lean.heartbeats_off` |
+`set_option autoImplicit true in tac` | `lean.auto_implicit` |
+`set_option debug.skipKernelTC true in tac` | `lean.skip_kernel_tc` |
+`Lean.ofReduceBool` as a term | `lean.trust_compiler` |
+homoglyph identifiers | `generic.homoglyph_identifier` |
+`axiom` / `#exit` / `variable` / `run_cmd` appended after the theorem | flagged anyway, though they cannot change the verdict |
+
+What *does* change is whose problem the statement is. A vacuous or
+trivially-true statement in a fixed task set is **your dataset's bug, not
+the model's**, so audit the statements once rather than per attempt — and
+with the statements given there is no prose to judge against, so no
+`--informal` is needed:
+
+```bash
+ftp-eval check-statement -b lean4 --formal statements.jsonl
+```
+
+That runs the elaboration, triviality and vacuity probes over the task set
+and skips faithfulness, which is the honest split: with no prose, nothing
+can say the formalization means the right thing, and the report says so
+instead of implying the structural pass was enough.
+
+### Statement tampering, when the model does supply the statement
+
+Checked under `full_file` and `header_plus_proof`. The required
+`formal_statement` must appear in the source after normalization: comments
+stripped, whitespace collapsed, and the trailing `:=`/`:= by` seam cut,
+since that is where the proof begins rather than part of the claim.
 
 This is textual matching, with the limits that implies. A semantically
 equivalent reformulation gets flagged; a definitionally sneaky one might

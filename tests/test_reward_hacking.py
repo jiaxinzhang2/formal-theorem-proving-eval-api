@@ -298,3 +298,68 @@ def test_every_pattern_has_a_unique_id():
 
     ids = [p.id for p in PATTERNS]
     assert len(ids) == len(set(ids))
+
+
+# -- when the harness supplies the statement --------------------------
+#
+# Under CONTINUE_STATEMENT the model writes only the proof body. Two
+# checks are deliberately switched off there, because the tricks they
+# catch become impossible rather than merely undetected: the statement's
+# binders and goal are elaborated in the same command as the proof body,
+# so nothing the model writes can alter them. Everything that lives
+# *inside* the proof must still be caught, and this pins that down.
+
+
+CONTINUED_STATEMENT = "theorem target (n : Nat) (h : Nat.Prime n) : n >= 2 := by"
+
+
+def continue_result(proof: str):
+    backend = create("mock")
+    task = ProofTask(
+        task_id="t",
+        header="import Mathlib",
+        formal_statement=CONTINUED_STATEMENT,
+        assembly=Assembly.CONTINUE_STATEMENT,
+    )
+    return backend.verify(task, ProofAttempt(task_id="t", proof=proof + " MOCK_PASS"))
+
+
+@pytest.mark.parametrize(
+    "label,proof",
+    [
+        ("sorry", " sorry"),
+        ("sorry inside a have", " have k : n >= 2 := by sorry\n  exact k"),
+        ("sorryAx", " exact sorryAx _"),
+        ("admit", " admit"),
+        ("native_decide", " native_decide"),
+        ("heartbeats off, tactic scoped", " set_option maxHeartbeats 0 in simp"),
+        ("autoImplicit, tactic scoped", " set_option autoImplicit true in simp"),
+        ("skipKernelTC, tactic scoped", " set_option debug.skipKernelTC true in simp"),
+        ("compiler-trust axiom", " exact Lean.ofReduceBool _ _ _"),
+        ("homoglyph identifier", " exact Nаt.foo h"),
+        # Declarations appended after the theorem cannot change what was
+        # proved, but they are still flagged rather than ignored.
+        ("axiom appended after", " simp\n\naxiom cheat : False"),
+        ("#exit appended after", " simp\n#exit\ngarbage"),
+        ("variable appended after", " simp\n\nvariable (hc : False)"),
+        ("run_cmd appended after", " simp\n\nrun_cmd Lean.Elab.Command.elabCommand _"),
+    ],
+)
+def test_in_body_hacks_are_still_caught_when_the_statement_is_given(label, proof):
+    result = continue_result(proof)
+    assert result.status is Status.REJECTED, "%s was not caught" % label
+    assert result.error_kind is ErrorKind.SOUNDNESS
+
+
+def test_an_honest_continuation_is_not_flagged():
+    result = continue_result(" exact Nat.Prime.two_le h")
+    assert result.status is Status.VERIFIED, result.soundness.violations
+
+
+def test_tampering_and_shadowing_checks_are_off_for_a_given_statement():
+    # Not a gap: the model's text is the proof body of the same command
+    # that elaborated the statement, so it cannot redefine the statement's
+    # terms or alter its text. Running the checks anyway would only
+    # produce false flags on honest proofs that mention those names.
+    report = screen_source(" exact Nat.Prime.two_le h", "lean4", required_statement=None)
+    assert report.ok
