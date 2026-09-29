@@ -1,0 +1,118 @@
+"""The layering, enforced rather than described.
+
+The package is four layers, and every import must go strictly downward::
+
+    spec/                the contracts
+    source/              reading formal source text
+    backends/            talking to a prover
+    proving/             API 1 -- does this answer prove this theorem?
+    autoformalization/   API 2 -- is this statement faithful?
+
+This file exists because the rule was broken twice while nobody was
+checking. ``proving/verifier.py`` imported statement metrics from
+``autoformalization/``, and ``autoformalization/checker.py`` imported the
+Verifier from ``proving/`` -- so the "two separate APIs" were a circle. The
+second one also hid a bug: metrics computed in the backend layer were
+computed on the one code path grading does not use.
+
+A docstring cannot prevent that from happening again. A test can.
+"""
+
+from __future__ import annotations
+
+import pathlib
+import re
+
+import pytest
+
+ROOT = pathlib.Path(__file__).resolve().parent.parent / "src" / "ftp_eval"
+
+#: Lower number = deeper. A module may import from a strictly lower layer
+#: and from its own, never from an equal-or-higher one.
+LAYER = {
+    "spec": 0,
+    "source": 1,
+    "backends": 2,
+    "proving": 3,
+    "autoformalization": 3,
+}
+
+#: Indented too, because a function-local import evades the rule just as
+#: effectively as a top-level one -- and one did.
+IMPORT_RE = re.compile(r"^[ \t]*from (\.+)([\w.]*) import ", re.M)
+
+
+def _modules() -> list[pathlib.Path]:
+    return sorted(p for p in ROOT.rglob("*.py") if "__pycache__" not in p.parts)
+
+
+def _resolve(module: pathlib.Path, dots: str, tail: str) -> str:
+    """The dotted path, relative to ftp_eval, that a relative import names."""
+    parts = list(module.relative_to(ROOT).parts[:-1])
+    up = len(dots) - 1
+    if up:
+        parts = parts[: len(parts) - up]
+    return ".".join([*parts, tail]) if tail else ".".join(parts)
+
+
+def _edges() -> list[tuple[str, str, str]]:
+    """Every (module, importer layer, imported layer) crossing a boundary."""
+    out = []
+    for module in _modules():
+        parts = module.relative_to(ROOT).parts
+        if len(parts) < 2 or parts[0] not in LAYER:
+            continue  # a top-level file: cli.py, registry.py, io.py
+        source = parts[0]
+        for match in IMPORT_RE.finditer(module.read_text(encoding="utf-8")):
+            target = _resolve(module, match.group(1), match.group(2))
+            destination = target.split(".")[0]
+            if destination not in LAYER or destination == source:
+                continue
+            out.append(("/".join(parts), source, destination))
+    return out
+
+
+def test_every_import_goes_strictly_downward():
+    violations = [
+        "%s imports %s/ (layer %d -> %d)" % (module, dst, LAYER[src], LAYER[dst])
+        for module, src, dst in _edges()
+        if LAYER[dst] >= LAYER[src]
+    ]
+    assert not violations, "layering broken:\n  " + "\n  ".join(violations)
+
+
+def test_the_two_apis_do_not_import_each_other():
+    # The whole point of splitting them. Grading a contest never asks
+    # whether a statement is faithful, and auditing a problem set never
+    # asks whether anybody proved it.
+    crossings = [
+        "%s imports %s/" % (module, dst)
+        for module, src, dst in _edges()
+        if {src, dst} == {"proving", "autoformalization"}
+    ]
+    assert not crossings, "the two APIs reference each other:\n  " + "\n  ".join(crossings)
+
+
+def test_source_layer_imports_nothing_else_in_the_package():
+    # What makes it safe for everything above to stand on.
+    reaching_out = [
+        "%s imports %s/" % (module, dst) for module, src, dst in _edges() if src == "source"
+    ]
+    assert not reaching_out, "source/ reached upward:\n  " + "\n  ".join(reaching_out)
+
+
+def test_no_module_named_shared_came_back():
+    # `shared/` was a folder named for a relationship instead of for what
+    # it held, which is how two APIs ended up importing each other behind
+    # it. If it reappears, the layers above are the place to look first.
+    assert not (ROOT / "shared").exists(), (
+        "shared/ is back; put the module in the layer that describes it "
+        "(source/, backends/) or inside the one API that uses it"
+    )
+
+
+@pytest.mark.parametrize("layer", sorted(LAYER))
+def test_every_layer_exists_and_is_a_package(layer):
+    directory = ROOT / layer
+    assert directory.is_dir(), "%s/ is missing" % layer
+    assert (directory / "__init__.py").exists(), "%s/ has no __init__.py" % layer

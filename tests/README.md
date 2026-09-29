@@ -1,6 +1,6 @@
 # Tests
 
-455 tests, no Lean required — everything runs on the `mock` backend.
+411 tests, no Lean required — everything runs on the `mock` backend.
 
 ```bash
 pytest -q                          # all of them
@@ -9,23 +9,30 @@ python tests/measure_speed.py  # the speed numbers, reproducible
 
 | file | what it pins down |
 |---|---|
+`test_layering.py` | **the four layers** — every import goes downward, and the two APIs never reference each other |
 `test_matching.py` | stage ①: does `answer.lean` state `theorem.lean`? |
 `test_matching_adversarial.py` | **attacks** on stage ①. Every case is one that worked when first tried |
-`test_grading.py` | the three-stage pipeline, and the results folder |
-`test_reward_hacking.py` | every check in `soundness.py`, both directions |
+`test_grading.py` | the three-stage pipeline, the results folder, and that metrics are recorded for refused answers too |
+`test_reward_hacking.py` | every check in `source/soundness.py`, both directions, and the statement/proof class split |
 `test_soundness.py` | the screen at the verifier layer |
 `test_comments.py` | comment handling — exploitable when it is wrong |
 `test_statement_and_judge.py` | statement probes, judges, consensus voting |
 `test_lean4_parsing.py` | Lean log parsing and error classification |
 `test_modes.py` | failure modes with attribution; success modes |
 `test_proof_analysis.py` | tactics, structure, repetition, correlations |
-`test_metrics.py` | pass@k, including where the naive version is wrong |
-`test_runner.py` | batch execution: streaming, resume, caching |
-`test_cli_and_io.py` | the CLI and JSONL round-tripping |
+`test_cli_and_io.py` | the six commands, the registry, the HTTP adapter's mapping |
 `test_performance.py` | **complexity guarantees** — cost at n vs 4n |
 `measure_speed.py` | the measurement script CI runs with `--check` |
 
-## Two files worth reading even if you never run the suite
+## Three files worth reading even if you never run the suite
+
+**`test_layering.py`** is the only thing keeping the two APIs apart. It
+walks every import in the package, including the indented ones, and fails
+on any that does not go strictly downward through `spec/` → `source/` →
+`backends/` → the two APIs. It exists because the rule was broken twice
+while nobody was checking — and one of those breaks hid a bug, since the
+metrics computed in the backend layer were computed on the one code path
+grading does not use.
 
 **`test_matching_adversarial.py`** is the honest account of how much the
 grader can be trusted. Each test is an attack, labelled with the direction

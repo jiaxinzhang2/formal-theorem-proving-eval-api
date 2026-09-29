@@ -561,7 +561,27 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _force_utf8_output() -> None:
+    """Print Lean source without depending on the console codepage.
+
+    Lean is full of characters a Windows console cannot encode by default
+    (a bare `ℕ` is enough), and a UnicodeEncodeError while printing a
+    probe looks like a tool failure rather than a terminal setting. Errors
+    are replaced rather than raised: a mangled character is a far smaller
+    problem than losing the verdict that was about to be reported.
+    """
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is None:
+            continue
+        try:
+            reconfigure(encoding="utf-8", errors="replace")
+        except (ValueError, OSError):  # pragma: no cover - a detached stream
+            pass
+
+
 def main(argv: Sequence[str] | None = None) -> int:
+    _force_utf8_output()
     args = build_parser().parse_args(argv)
     try:
         return int(args.func(args))

@@ -70,19 +70,36 @@ homoglyph identifiers | `generic.homoglyph_identifier` |
 `axiom` / `#exit` / `variable` / `run_cmd` appended after the theorem | flagged anyway, though they cannot change the verdict |
 
 What *does* change is whose problem the statement is. A vacuous or
-trivially-true statement in a fixed task set is **your dataset's bug, not
-the model's**, so audit the statements once rather than per attempt — and
-with the statements given there is no prose to judge against, so no
-`--informal` is needed:
+trivially-true statement in a published problem set is **the setter's bug,
+not the participant's**, so audit the problem folder once rather than
+per answer:
 
 ```bash
-ftp-eval check-statement -b lean4 --formal statements.jsonl
+ftp-eval audit --problems benchmarks/my-2026/problems -b lean4
 ```
 
-That runs the elaboration, triviality and vacuity probes over the task set
-and skips faithfulness, which is the honest split: with no prose, nothing
-can say the formalization means the right thing, and the report says so
-instead of implying the structural pass was enough.
+That runs the elaboration, triviality and vacuity probes over every
+problem. Faithfulness is judged only for problems that record a `prose:`
+line, and problems without one are reported as unjudged rather than passed:
+with no prose, nothing can say the formalization means the right thing, and
+the report says so instead of implying the structural pass was enough.
+
+### A statement is not screened for what a proof is screened for
+
+`screen_source` takes a `classes` argument, and the two callers pass
+different sets. An answer gets `PROOF_HACK_CLASSES`, which is everything.
+A problem statement gets `STATEMENT_HACK_CLASSES`, which deliberately
+leaves out:
+
+| left out for statements | why |
+|---|---|
+`placeholder` | a problem file's `sorry` **is** the hole a participant fills |
+`statement_tampering` | its `variable` pattern fires on `variable (n : Nat)`, ordinary Lean in a problem file |
+`resource_uncap` | the heartbeat cap is about proof search, not about what the statement means |
+
+This is not a harmless superset in the other direction: screening a
+statement with the proof-side rules reports every well-formed problem as
+malformed. It did, for all three demo problems, until the split existed.
 
 ### Statement tampering, when the model does supply the statement
 
@@ -103,20 +120,26 @@ reviewed, whereas a silent false `verified` is not.
 result.status                  # Status.REJECTED
 result.error_kind              # ErrorKind.SOUNDNESS
 result.soundness.ok            # False
-result.soundness.violations    # ("proof contains placeholder 'sorry'",)
+result.soundness.violations    # ("[placeholder:lean.sorry] proof contains `sorry`, …",)
 ```
 
-In aggregate, `Summary.soundness_violations` counts each distinct reason,
-`Summary.integrity_ok` goes false, and `ftp-eval verify --strict` exits 5.
-Rejected attempts count as failures in `pass@k` — they were scoreable and
-they did not succeed — so an unsound pass lowers the score rather than
-vanishing from the denominator.
+In aggregate, the contest report counts each distinct reason under
+`reward hacking seen`, names the specific pattern that fired, and
+`ftp-eval grade --strict` exits 5. A refused answer counts as not solved —
+it was graded and it did not succeed — so an unsound pass lowers the score
+rather than vanishing from the denominator.
 
 ## Adding a check
 
-Syntactic patterns go in the tables at the top of
-`src/ftp_eval/soundness.py`, keyed by language. Anything that needs to ask
-the prover goes in that backend's `extra_soundness_checks`.
+Syntactic patterns go in the `PATTERNS` table in
+`src/ftp_eval/source/soundness.py`, keyed by language. Each entry carries
+`requires` (cheap literal triggers checked before the regex) and `example`
+(a snippet the pattern must catch, which makes the table self-testing), and
+a `HackClass` — which also decides whether it applies to statements as well
+as proofs.
+
+Anything that needs to ask the prover goes in that backend's
+`extra_soundness_checks`, in `src/ftp_eval/backends/`.
 
 Every check needs a test in `tests/test_soundness.py` covering both
 directions: the trick is caught, and the honest proof that superficially

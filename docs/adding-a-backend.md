@@ -1,7 +1,7 @@
 # Adding a backend
 
 A backend answers one question — *does this proof close this goal?* — in
-the shared vocabulary of `ftp_eval.types`. Everything else (source
+the shared vocabulary of `ftp_eval.backends.types`. Everything else (source
 assembly, soundness screening, timing, timeouts, error wrapping,
 caching, concurrency) is handled above you.
 
@@ -12,7 +12,7 @@ implementation and its actual logic is about thirty lines.
 
 ```python
 from ftp_eval import Verifier, RawVerdict, register
-from ftp_eval.types import Diagnostic, ErrorKind, Severity
+from ftp_eval.backends.types import Diagnostic, ErrorKind, Severity
 
 class MyProver(Verifier):
     name = "myprover"       # what --backend myprover resolves to

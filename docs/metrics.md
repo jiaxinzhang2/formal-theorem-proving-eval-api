@@ -1,13 +1,19 @@
 # Metrics reference
 
 Everything the harness records, by category. Recorded for **every**
-attempt, not only successes: how a model fails is as informative as how it
-succeeds, and most of the categories below are only interesting as a
-comparison between the two.
+answer, not only the correct ones: how an answer fails is as informative as
+how it succeeds, and most of the categories below are only interesting as
+the comparison between the two.
 
-Each `results.jsonl` row carries the per-attempt fields; `ftp-eval score
-results.jsonl --tactics` prints the aggregates, and `--json` emits all of
-them.
+The unit is one answer to one problem. `results/<run-id>/answers/<who>/<problem>.json`
+carries the per-answer fields, `3-report/*.tsv` the aggregates, and
+`summary.json` the headline numbers.
+
+Where they come from: a backend reports only what the prover said, and
+`ftp_eval.proving.analysis.measure` fills the rest in. That matters here
+because metrics are collected for answers **refused at stage 1** too —
+those never reach a prover, so nothing else would record their shape, and
+they are where the patterns are.
 
 ---
 
@@ -17,15 +23,17 @@ The headline numbers.
 
 | metric | where | meaning |
 |---|---|---|
-`status` | per attempt | `verified` / `rejected` / `failed` / `timeout` / `error` / `skipped` |
-`pass@k` | `Summary.pass_at` | Unbiased estimator (Chen et al. 2021). Tasks with fewer than k scoreable samples are dropped, not padded |
-`solve_rate` | `Summary` | Fraction of *tasks* solved by ≥1 sample |
-`attempt_pass_rate` | `Summary` | Fraction of scoreable *attempts* that verified |
-`by_split` | `Summary` | All of the above, per split |
-`by_sample_index` | `Summary` | Pass rate at each sample position. A steep decline means later samples are much worse — worth knowing before paying for k=10 |
+`solved` | per answer | Established as proving the theorem. Only ever true because a stage said so |
+`kernel_checked` | per answer | Whether stage 2 actually ran. `solved` without this means the text screen passed, nothing more |
+`stage_reached` / `stage_status` | per answer | Exactly where the answer ended up, so no result is of unclear provenance |
+`failed_at` | per answer | Which stage refused it, if one did |
+`by_problem` | `3-report/by-problem.tsv` | How many participants solved each problem. A problem nobody solved and a problem everybody solved are both worth a second look |
+`by_participant` | `3-report/by-participant.tsv` | The leaderboard, with the stage each loss happened at |
+`reasons` | `3-report/reasons.tsv` | Every distinct refusal reason, counted |
 
-`error` and `skipped` are excluded from the pass-rate denominator: an
-attempt that never got a verdict is not evidence about the model.
+`NOT_RUN` is never folded into passed or failed: a stage that could not run
+is not evidence either way. A prover error is not the participant's fault
+and does not count against them.
 
 ## 2. Soundness / reward hacking
 
@@ -102,16 +110,19 @@ one that solves 40% with twenty tactics.
 ## 5b. What carries signal
 
 The reason for collecting this many metrics is to find which ones matter.
-`Summary.correlations` does that search once per run: point-biserial
-correlation between every numeric metric and pass/fail, ranked by
-magnitude, with metrics below |r| = 0.1 dropped so the table stays
-readable. Each row reports `r`, `n`, and the metric's mean among passes
-vs failures.
+`correlate_with_success` in `proving/analysis/stats.py` does that search
+once per run: point-biserial correlation between every numeric metric and
+solved/not, ranked by magnitude, with metrics below |r| = 0.1 dropped so
+the table stays readable. Each row reports `r`, `n`, and the metric's mean
+among solved answers vs unsolved ones.
 
-Also aggregated for slicing: `by_model` (per-model rollup, so one results
-file can hold a comparison), `by_split`, `by_sample_index`, and
-`samples_to_first_success` (a low median means extra samples are mostly
-wasted).
+Which metrics exist is the caller's knowledge, not the statistics module's,
+so the field list is a required argument — `NUMERIC_FIELDS` for proof
+metrics, `STATEMENT_METRIC_FIELDS` for statement ones. Passing none returns
+nothing rather than silently scanning a default that has drifted.
+
+Also aggregated for slicing: by problem, by participant, and by refusal
+reason (`3-report/*.tsv`).
 
 **These are associations.** A metric can track success because it tracks
 task difficulty — `named_steps` correlating with failure may only mean
@@ -148,13 +159,15 @@ busy-looking proof that is the same line thirty times.
 `tactic_repetition_rate` | 1 − distinct/total over tactic invocations |
 `max_consecutive_duplicate_lines` | >2 is usually a loop |
 `repeated_trigram_rate` | Standard rep-3 measure over tokens |
-`duplication.mean_duplicate_fraction` | **Across** the k samples of a task |
-`duplication.tasks_all_identical` | Tasks where every sample was byte-identical |
+`duplication.mean_duplicate_fraction` | **Across** the answers to one problem |
+`duplication.tasks_all_identical` | Problems where every answer was byte-identical |
 
-Cross-sample duplication bears directly on whether pass@k means anything:
-the estimator assumes k independent draws, so if a model returns the same
-text five times the real sample size is one. The report emits an explicit
-warning when this crosses 25%.
+Duplication across answers to the same problem is worth a look for a
+different reason than repetition inside one: byte-identical answers from
+different participants are either a shared source or a shared model, and
+either way the leaderboard is measuring fewer independent attempts than it
+appears to. The report emits an explicit warning when this crosses 25%. It
+is a pointer, not an accusation.
 
 ## 7. Comments and documentation
 

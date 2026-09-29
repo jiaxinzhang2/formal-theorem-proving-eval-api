@@ -1,6 +1,7 @@
 # formal-theorem-proving-eval-api
 
-A unified API for evaluating formal theorem-proving models.
+Grading formal theorem proving from Lean files, for people who have to
+defend the numbers afterwards.
 
 **New here?** Two minutes:
 
@@ -9,7 +10,7 @@ A unified API for evaluating formal theorem-proving models.
 understand the design | [ARCHITECTURE.md](ARCHITECTURE.md), then [`src/ftp_eval/spec/`](src/ftp_eval/spec/) — the contracts, no logic |
 run a contest: N Lean problems, many participants | [`benchmarks/README.md`](benchmarks/README.md) |
 grade one answer against one problem | `ftp-eval match theorem.lean answer.lean` |
-see every input shape working | [`examples/README.md`](examples/README.md) |
+see every verdict on a worked example | [`examples/README.md`](examples/README.md) |
 know what counts as cheating, and what does not | [`docs/soundness.md`](docs/soundness.md) |
 know what gets measured | [`docs/metrics.md`](docs/metrics.md) |
 plug in a prover | [`docs/adding-a-backend.md`](docs/adding-a-backend.md) |
@@ -17,79 +18,68 @@ plug in a prover | [`docs/adding-a-backend.md`](docs/adding-a-backend.md) |
 Nothing below needs Lean installed — every example runs on the `mock`
 backend.
 
----
+## One input format
 
-A dataset of formal theorem proving has three artifacts — a problem in
-natural language, a formal statement, a formal proof — and therefore **two
-links to check**, not one:
+Lean files. Nothing else:
+
+| thing | is |
+|---|---|
+| a **problem** | one `.lean` file, one theorem |
+| an **answer** | one `.lean` file |
+| a **benchmark** | a folder of problems |
+| a **submission** | a folder per participant |
+
+```bash
+ftp-eval match theorem.lean answer.lean            # one answer, one problem
+ftp-eval grade --problems P/ --submissions S/      # a whole benchmark
+ftp-eval audit  --problems P/                      # check the problems themselves
+```
+
+## Two questions, two APIs
 
 ```
 natural language  ──①──▶  formal statement  ──②──▶  formal proof
-                  faithful?                 valid?
+                  faithful?                 proves it?
+                  autoformalization/        proving/
 ```
 
-Both are here, behind one interface, with pluggable prover backends:
+They are separate, and they stay separate — neither package imports the
+other, and a test enforces it. You run ① **before** publishing a problem
+set and ② when answers come in. The reason to keep them apart is that
+fusing them is how a suspicious statement with a valid proof gets counted
+as solved.
 
 ```python
-from ftp_eval import StatementTask, ProofAttempt, StatementChecker, create, create_judge
+from ftp_eval import match_submission
 
-verifier = create("lean4", project_dir="~/mathlib-project")
-checker  = StatementChecker(verifier, create_judge("claude"))
-
-task = StatementTask(
-    task_id="nat_add_zero",
-    informal_statement="Show that n + 0 = n for every natural number n.",
-    header="import Mathlib",
-    formal_statement="theorem nat_add_zero (n : Nat) : n + 0 = n := by",
-)
-
-print(checker.check(task).status)                                    # ① StatementStatus.OK
-print(verifier.verify(task.to_proof_task(),
-                      ProofAttempt(task_id="nat_add_zero",
-                                   proof=" simp")).status)           # ② Status.VERIFIED
+report = match_submission(open("theorem.lean").read(), open("answer.lean").read())
+print(report.verdict)   # e.g. "mismatched: dependency_changed"
 ```
 
 Zero runtime dependencies — the core is standard library only. The Claude
 judge needs `anthropic`; nothing else does.
 
-## Why both links
-
-Checking only the proof has a trivial winning strategy: formalize the
-problem as `True` and prove it with `trivial`. Every proof checks out, the
-score is 100%, and nothing was proved. The demo below shows that
-concretely — a proof-only reading of the same data says 100%, and the
-two-link reading says 50% and names the difference:
-
-```
-end-to-end: 4 task(s), 2 solved (50.0%)
-  proved_wrong_statement          2   valid proof of the WRONG statement
-  solved                          2   faithful statement + valid proof
-IMPORTANT: 2 task(s) had a valid proof of an unfaithful statement. A
-proof-only harness would have scored every one of those as a success.
-```
-
 ## Passing the kernel is not the bar
 
-The load-bearing idea of this package. A prover's "yes" does not mean a
-proof exists:
+The load-bearing idea. A prover's "yes" does not mean a proof exists:
 
-| what the model writes | what the kernel does |
+| what the answer contains | what the kernel does |
 |---|---|
-`sorry` | **Compiles.** Lean reports it as a *warning*; exit code 0 |
+`sorry` | **Compiles.** Lean reports a *warning*; exit code 0 |
 `axiom cheat : <the goal>` | **Compiles with no complaint at all.** Asserting a proposition as an axiom is, to the kernel, perfectly well-formed |
-`variable (h : False)` | **Compiles.** Lean silently adds it to the theorem as a hypothesis, weakening it to nothing |
+`variable (h : False)` | **Compiles.** Lean silently adds it as a hypothesis, weakening the theorem to nothing |
 `#exit` | **Compiles.** Lean stops reading the file; anything after is never checked |
 contradictory hypotheses | **Compiles, and the proof is genuinely valid.** Anything follows from a contradiction, so the theorem says nothing |
-`native_decide` | **Compiles.** The result is trusted from the compiler, not checked by the kernel |
+`native_decide` | **Compiles.** Trusted from the compiler, not checked by the kernel |
 
 So every accepted proof is screened above the backend layer, and a proof
 that trips the screen comes back `REJECTED`, never `VERIFIED`. Backends
 cannot opt out. For Lean there is a second, stronger layer: a `#print
-axioms` audit, which is the only check that sees through indirection — a
-`sorry` inside a helper lemma three files away still shows up in the axiom
-set, and a declared axiom shows up nowhere else.
+axioms` audit, the only check that sees through indirection — a `sorry`
+inside a helper lemma three files away still shows up in the axiom set, and
+a declared axiom shows up nowhere else.
 
-Detected, each recorded by class **and** by specific trick:
+Recorded by class **and** by specific trick, so the list can grow:
 
 | class | tricks |
 |---|---|
@@ -102,14 +92,18 @@ Detected, each recorded by class **and** by specific trick:
 `elaboration_trick` | `autoImplicit`, `checkBinderAnnotations false`, low-level `backward.*` options |
 `homoglyph` | identifiers mixing ASCII with lookalike Unicode |
 
-Vacuous hypotheses are handled on the *statement* side (`ProbeKind.VACUOUS`),
-because there the proof is genuinely valid and only the statement is at
-fault.
+**Not every class applies to every file.** A problem file's `sorry` is the
+hole a participant fills, and its `variable (n : Nat)` is ordinary Lean —
+so `ftp-eval audit` screens statements for a deliberately smaller set
+(`STATEMENT_HACK_CLASSES`) than `ftp-eval grade` screens answers for.
+Screening a statement with the proof-side rules is not a harmless
+superset: it reports every well-formed problem as malformed.
 
-## Two Lean files: does `answer.lean` prove `theorem.lean`?
+Vacuous hypotheses are handled on the *statement* side
+(`ProbeKind.VACUOUS`), because there the proof is genuinely valid and only
+the statement is at fault.
 
-The input contract for a formal-conjectures-style setup: a problem file and
-a submitted file, one theorem per problem.
+## Does `answer.lean` prove `theorem.lean`?
 
 ```bash
 ftp-eval match theorem.lean answer.lean
@@ -119,7 +113,6 @@ ftp-eval match theorem.lean answer.lean
 target:  demo_least_N_3
 verdict: mismatched
 text screen: mismatched
-answer(s) submitted: 4
 definitions: changed=1
   FATAL dependency_changed  abbrev IsSumDistinctSet is defined differently in
                             the answer, so the theorem no longer means what it says
@@ -138,7 +131,7 @@ the kernel wins:
 text screen | signatures compared after normalizing `answer(...)` holes and whitespace; definitions diffed; helpers checked; reward hacking screened | no |
 kernel confirmation | states the **theorem's** proposition and closes it with the **answer's** proof term — if that typechecks, the answer proves the theorem whatever the texts look like | yes (`-b lean4`) |
 
-Four properties of the format make the naive answer wrong, and each one is
+Four properties of the format make the naive answer wrong, and each is
 handled:
 
 **`theorem.lean` introduces definitions.** It is not just a statement: the
@@ -161,51 +154,74 @@ that way. So a right statement with no proof is `matched_but_unproved` — an
 honest miss, not tampering and not cheating.
 
 **`answer(sorry)` is a hole the answer fills.** `= answer(sorry)` becomes
-`= answer(4)`, so the statement legitimately changes and verbatim comparison
-would flag every solved problem. The holes are normalized away; everything
-else — binders, implicitness, bounds, `=` vs `≤` — is compared exactly.
+`= answer(4)`, so the statement legitimately changes and verbatim
+comparison would flag every solved problem. The holes are normalized away;
+everything else — binders, implicitness, bounds, `=` vs `≤` — is compared
+exactly.
 
-Runnable fixtures in [examples/answer-verdicts/](examples/answer-verdicts/): an honest
-answer, one with helper definitions, one that weakens the claim, one that
-guts a definition, one that leaves a cited helper unproved, one with no
-proof yet.
+Runnable fixtures in [examples/answer-verdicts/](examples/answer-verdicts/):
+an honest answer, one with helper definitions, one that weakens the claim,
+one that guts a definition, one that leaves a cited helper unproved, one
+with no proof yet.
 
-## Layout
+## Grading a benchmark
 
-The package is organized along the two links, so the structure shows the
-architecture rather than hiding it:
+Three stages, and every stage's conclusion is recorded:
 
-```
-ftp_eval/
-├── formalizing/     ① is the formalization faithful to the problem?
-│   ├── checker.py       structural probes + an LLM judge, kept distinct
-│   ├── judge.py         the judge interface, a mock, consensus voting
-│   └── judges/          provider-backed judges (claude)
-├── proving/         ② does the proof close the goal?
-│   ├── verifier.py      the interface every backend implements
-│   ├── runner.py        batch execution: streaming, resume, caching
-│   └── backends/        mock, lean4, axle
-├── analysis/        what happened, for passes and failures alike
-│   ├── tactics.py       which tactics, in what order
-│   ├── structure.py     proof shape, statement complexity, correlations
-│   ├── modes.py         failure modes with attribution; success modes
-│   └── scoring.py       unbiased pass@k and the Summary
-├── pipeline.py      both links together, with a combined verdict
-│
-├── types.py         the vocabulary every layer speaks   ─┐
-├── soundness.py     reward-hacking detection             │ shared by
-├── comments.py      what counts as a comment, per language │ all three
-├── dataset.py       JSONL I/O, the three-file layout     │ layers
-├── registry.py      backend and judge lookup by name    ─┘
-└── cli.py
+```bash
+ftp-eval grade -b lean4 -o project_dir=~/mathlib-project \
+  --problems benchmarks/my-2026/problems \
+  --submissions benchmarks/my-2026/submissions \
+  --out results --strict
 ```
 
-The whole public API is importable straight from `ftp_eval` — these paths
-matter only when extending the package. Two names are deliberately
-independent of the layout: the `ftp_eval.backends` entry-point group (a
-plugin contract third parties write into their own metadata, so it must
-not move when this package is reorganized) and every symbol in
-`__all__`.
+| stage | what it decides | if it cannot run |
+|---|---|---|
+**1 match** | is this an answer to *this* problem? Text only, so it is cheap and runs first | — |
+**2 compile** | does the prover accept the answer's proof *of the problem's proposition*? Authoritative | `NOT_RUN`, never folded into passed or failed |
+**3 report** | statistics over correct **and** incorrect answers | — |
+
+Stage 3 measures every answer, including the ones stage 1 refused — those
+never reach a prover, so nothing else would record their shape, and they
+carry most of the signal.
+
+The results directory is laid out so a newcomer can find things and a
+sceptic can re-run them:
+
+```
+results/<run-id>/
+├── run.json                 versions, hashes, counts, warnings
+├── problems.json/.tsv       per-problem metadata, including the MathDB id
+├── leaderboard.tsv          who solved what
+├── summary.txt/.json
+├── 1-match/all.jsonl        every stage-1 verdict
+├── 1-match/refused.jsonl    just the refusals, with the trick named
+├── 2-compile/all.jsonl      every stage-2 verdict
+├── 2-compile/probes/…       the exact source the prover was given
+├── 2-compile/logs/…         the prover's own output
+├── 3-report/*.tsv           by problem, by participant, by reason
+└── answers/<who>/<prob>.json  everything known about one answer
+```
+
+Full layout and naming rules in [ARCHITECTURE.md](ARCHITECTURE.md).
+
+## Auditing your own problem set
+
+Run this before anyone answers. A vacuous or trivially-true statement is
+the setter's bug, and it is better found once over the problem folder than
+inferred later from a leaderboard on which everybody scored.
+
+```bash
+ftp-eval audit --problems benchmarks/my-2026/problems \
+  -b lean4 --judge claude --judge-samples 3 --yes
+```
+
+It checks that each statement elaborates, is not closable by `trivial`, has
+no contradictory hypotheses, assumes nothing it should prove — and, where
+the problem records `prose:`, that an LLM judge finds the formalization
+faithful. Problems with no `prose:` are reported as unjudged rather than
+passed, and the judge is not called for them at all: judging against
+nothing spends money to learn nothing.
 
 ## Install
 
@@ -221,138 +237,119 @@ else does.
 
 ## The CLI
 
-```bash
-ftp-eval backends          # which provers can run here
-ftp-eval judges            # which judges can run here, and which cost money
-
-# Try the whole pipeline with no prover and no API key.
-ftp-eval verify -b mock --tasks examples/jsonl-mode/tasks.jsonl \
-  --attempts examples/jsonl-mode/attempts.jsonl --out results.jsonl --k 1,2 --tactics
-
-# Both links, from the three-file layout.
-ftp-eval eval-all -b lean4 --judge claude --yes \
-  --informal problems.jsonl --formal statements.jsonl --proofs proofs.jsonl
-```
+Six commands.
 
 | command | what it does |
 |---|---|
+`match theorem.lean answer.lean …` | does the answer prove the theorem? `--show-probe` prints the source a prover would get |
+`grade --problems P/ --submissions S/` | the three-stage pipeline over a benchmark |
+`audit --problems P/` | check the problem set itself |
 `backends` / `judges` | what can run here; `judges` flags which ones bill you |
 `doctor -b NAME` | diagnose one backend; non-zero exit if unusable |
-`verify` | link ②: proofs against statements, streamed to JSONL |
-`check-statement` | link ①: formalizations against their prose |
-`eval-all` | both, with a combined verdict |
-`score results.jsonl --tactics` | pass@k, reward-hacking breakdown, tactic and structure metrics |
-`compare a=x.jsonl b=y.jsonl` | rank several runs |
-`preview` | print the exact source a backend would receive |
 
-Run `preview` once per new dataset. A mis-set `assembly` makes every
-attempt a syntax error and looks exactly like a terrible model.
+Exit codes: `0` fine, `2` usage, `3` backend or judge unavailable, `5`
+something was refused (`--strict`).
 
-### Long runs
+Two habits worth having. Run `ftp-eval audit` on a new problem set before
+publishing it. Run `ftp-eval match --show-probe` on one answer before a
+long grading run: it prints exactly what the prover will be handed, and a
+misassembled probe looks identical to a participant who cannot prove
+anything.
 
-```bash
-ftp-eval verify -b lean4 -o project_dir=~/mathlib-project \
-  --tasks minif2f.jsonl --attempts samples.jsonl \
-  --out results.jsonl --timeout 300 -j 8 \
-  --cache-dir .cache --resume --k 1,5,10 --strict
+## Problem file format
+
+One theorem per file, formal-conjectures style, with a metadata block:
+
+```lean
+import Mathlib
+
+/-!
+# Least N for a 3-element sum-distinct set
+
+## Provenance
+- mathdb_id: demo.001
+- source: demo-2026
+- source_locator: problems/P001.lean
+- difficulty: unrated
+- author: demo
+- prose: Find the least N such that there exists a three-element subset A
+  of {1, ..., N} all of whose subset sums are distinct.
+-/
+
+namespace Demo
+
+/-- $A\subseteq\{1,\dots,N\}$ with all subset sums distinct. -/
+abbrev IsSumDistinctSet (A : Finset ℕ) (N : ℕ) : Prop := …
+
+@[category research open, AMS 5 11]
+theorem demo_least_N_3 :
+    IsLeast { N | ∃ A, IsSumDistinctSet A N ∧ A.card = 3 } answer(sorry) := by
+  sorry
+
+end Demo
 ```
 
-Results flush to `--out` as each lands, so you watch progress and keep
-partial work if the run dies. `--resume` skips what is already there.
-`--cache-dir` keys verdicts on (backend, statement, proof), so adding one
-model to a comparison only pays for the new work. The run aborts after 20
-consecutive harness errors rather than spending an hour on a broken
-toolchain. `--strict` exits 4 on harness errors and 5 on reward hacking.
-
-## Data format
-
-Three JSONL files, joined on `task_id` — **not** on line order, because
-three files that drift out of alignment would silently pair every problem
-with the wrong formalization.
-
-```jsonc
-// informal.jsonl
-{"task_id": "nat_add_zero", "informal_statement": "Show that n + 0 = n for every natural n."}
-
-// formal.jsonl
-{"task_id": "nat_add_zero", "header": "import Mathlib",
- "formal_statement": "theorem nat_add_zero (n : Nat) : n + 0 = n := by"}
-
-// proof.jsonl  -- k samples per task, numbered
-{"task_id": "nat_add_zero", "sample_index": 0, "model": "my-model", "proof": " simp"}
-```
-
-Field aliases are accepted (`problem`/`statement`/`nl`, `formal`/`theorem`,
-`completion`/`output`), and unrecognized columns are preserved in
-`metadata` rather than dropped. `assembly` says what the model was asked
-to emit, per task:
-
-| value | meaning |
-|---|---|
-`continue_statement` | header + statement + attempt (miniF2F: the model continues `:= by`) |
-`full_file` | the attempt is a complete source file |
-`header_plus_proof` | header + attempt, which restates the theorem |
-
-Under the latter two the model supplies the statement, so it is checked
-against the required one. Under `continue_statement` the harness
-concatenates it and tampering is impossible by construction.
+Unrecognized metadata keys are kept, not dropped — a setter's own
+bookkeeping field is not ours to discard. `prose:` is optional for grading
+and required for `audit` to judge faithfulness. Benchmark-wide facts,
+including the Lean toolchain and Mathlib revision, go in `benchmark.json`;
+the grader reconciles what was declared against what it actually ran and
+warns on a mismatch. Format spec in
+[`benchmarks/README.md`](benchmarks/README.md).
 
 ## Metrics
 
-Recorded for **every** attempt, including failures and timeouts — how a
-model fails is as informative as how it succeeds, and most of these are
-only interesting as the comparison. Full reference in
+Recorded for **every** answer, refused ones included — how an answer fails
+is as informative as how it succeeds, and a metric that exists only on
+successes cannot be compared against anything. Full reference in
 [docs/metrics.md](docs/metrics.md).
 
 | category | examples |
 |---|---|
-**Correctness** | unbiased pass@k, solve rate, per-split, per-model, pass rate by sample position, samples-to-first-success |
-**Soundness** | reward hacking by class and by specific trick, kernel axiom audit, `integrity_ok` |
+**Correctness** | solved, per problem, per participant, stage reached |
+**Soundness** | reward hacking by class and by specific trick, kernel axiom audit |
 **Statement quality** | elaborates, non-trivial, non-vacuous, gold-equivalent, judge faithfulness |
 **Failure modes** | ~35 specific Lean modes, plus **attribution**: model vs budget vs harness vs soundness |
 **Success modes** | one-line automation / `decide` / term mode / short & long chains / structured steps / `calc` / cases / induction / helper lemmas |
 **Proof structure** | declarations by kind, auxiliary lemmas, named steps, local dependency depth, cited lemmas, nesting, branch points, term vs tactic mode |
 **Tactic usage** | frequency, opening & closing tactics, transition pairs, mean position, per-tactic success rate |
 **Statement complexity** | binders by kind, hypotheses, conclusion size, quantifiers, connectives, distinct types |
-**Repetition** | line / tactic / trigram repetition, consecutive duplicates, and duplication *across* the k samples |
+**Repetition** | line / tactic / trigram repetition, consecutive duplicates, duplication across answers |
 **Comments** | segments by kind, doc comments, chars, ratio |
-**Cost** | Lean compile time (separate from wall time), harness overhead, seconds per solved task, judge tokens and estimated cost |
-**Signal search** | correlation of every numeric metric with pass/fail, ranked |
+**Cost** | Lean compile time (separate from wall time), harness overhead, judge tokens and estimated cost |
+**Signal search** | correlation of every numeric metric with solved/not, ranked |
 
-Everything is aggregated as distributions (mean / median / p25 / p75 / p90
-/ max / stdev) and split verified vs failed. Percentiles sit next to the
-mean because these are skewed: a few enormous proofs drag a mean away from
-what a typical proof looks like.
+Aggregated as distributions (mean / median / p25 / p75 / p90 / max /
+stdev) and split solved vs not. Percentiles sit next to the mean because
+these are skewed: a few enormous proofs drag a mean away from what a
+typical proof looks like.
 
-Three of these earn their place by catching things a pass rate cannot:
+Two of these earn their place by catching what a solve rate cannot:
 
 * **Attribution.** "40% of failures were truncated output" is an
-  instruction to raise `max_tokens`, not a capability result. Truncation
-  is detected before the syntax patterns, because a cut-off completion
-  *produces* a syntax error and reading that as "writes bad Lean" turns a
-  budget setting into a claim about the model.
-* **Success modes.** Two models at the same pass rate, one closing 90% of
-  goals with a single `omega` and the other writing structured multi-step
-  arguments, are not equally good — and the pass rate cannot say so.
-* **Cross-sample duplication.** pass@k assumes k independent draws. If a
-  model returns the same text five times the real sample size is one, and
-  the report says so rather than quoting a precision the data lacks.
+  instruction to raise `max_tokens`, not a capability result. Truncation is
+  detected before the syntax patterns, because a cut-off answer *produces*
+  a syntax error and reading that as "writes bad Lean" turns a budget
+  setting into a claim about the model.
+* **Success modes.** Two participants at the same solve rate, one closing
+  90% of goals with a single `omega` and the other writing structured
+  multi-step arguments, are not equally good.
 
 And two deliberate refusals: **global dependency depth** through the
 library is not computed (it needs the prover's environment; only the local
 subset is honest), and the correlation table carries **no p-values** — with
-~25 metrics scanned at once some will correlate by chance, so it is
+~35 metrics scanned at once some will correlate by chance, so it is
 labelled a pointer, not a finding.
 
 ### Speed
 
-The analysis layer runs on every attempt of every run, so its cost is
+The analysis layer runs on every answer of every run, so its cost is
 measured, budgeted and enforced rather than assumed.
 
 | | |
 |---|---|
-whole layer, per attempt | **0.18 ms** |
-1000-attempt run, all metrics | 0.18 s |
+whole layer, per answer | **0.10 ms** |
+100 problems × 20 participants, all three stages | 0.94 s |
 one `lake env lean` compile, for scale | 1–60 s |
 
 ```bash
@@ -360,21 +357,19 @@ python tests/measure_speed.py           # the numbers, reproducible
 python tests/measure_speed.py --check   # enforce budgets (CI runs this)
 ```
 
-Absolute budgets catch gross slowdowns, but they mean different things on
+Absolute budgets catch gross slowdowns but mean different things on
 different machines. The actual guarantee is **complexity**: scaling tests
-in `tests/test_performance.py` measure each hot path at size *n* and *4n*
-and fail if the ratio approaches quadratic, which is machine-independent.
-The guards are verified to fire — restoring the original quadratic
-dependency walk makes one report 58.6× growth for a 4× input against a 9×
-ceiling.
+in `tests/test_performance.py` measure each hot path at *n* and *4n* and
+fail if the ratio approaches quadratic, which is machine-independent. The
+guards are verified to fire — restoring the original quadratic dependency
+walk makes one report 58.6× growth for a 4× input against a 9× ceiling.
 
 Two optimizations paid for themselves: the dependency walk went from
-quadratic to linear (**140× faster** at 400 steps), and the ~40-pattern
-reward-hacking screen gained a literal prefilter (**45.9× faster** on the
-pattern loop). The second is only safe if a too-narrow trigger can never
-silently disable a check, so every pattern carries an example it must
-catch and a differential test proves the prefilter changes no verdict.
-Details in [docs/metrics.md](docs/metrics.md#cost-of-measuring).
+quadratic to linear (**140× faster** at 400 steps), and the reward-hacking
+screen gained a literal prefilter (**45.9× faster** on the pattern loop).
+The second is only safe if a too-narrow trigger can never silently disable
+a check, so every pattern carries an example it must catch and a
+differential test proves the prefilter changes no verdict.
 
 ## Judges
 
@@ -391,14 +386,11 @@ deserves:
 * **Disagreement is recorded, not smoothed.** Every sample's label is kept.
 * **An outage is never a rejection.** An API failure raises `JudgeError`
   and is reported as unjudged.
+* **It is not called when there is nothing to judge.** A problem with no
+  `prose:` is reported as unjudged rather than sent to the API.
 * **Tokens are measured; dollars are estimated.** Usage comes from the
   provider; the dollar figure comes from a local price table, is labelled
   an estimate everywhere, and should be checked against billing.
-
-```bash
-ftp-eval check-statement --informal problems.jsonl --formal statements.jsonl \
-  -b lean4 --judge claude --judge-samples 3 --yes
-```
 
 A paid judge refuses to run without `--yes`.
 
@@ -413,16 +405,15 @@ A paid judge refuses to run without `--yes`.
 ### lean4
 
 Batch compilation: one `lake env lean` per attempt, full elaboration, no
-persistent session. Slower than driving a REPL, but its verdict is the
-easy one to trust — the file either compiles against the Mathlib you
-pinned or it does not. Lean messages are parsed into positions and
-classified, the goal state stays attached to its error, and accepted
-proofs get the `#print axioms` audit (a second compile; `-o
-audit_axioms=false` to skip).
+persistent session. Slower than driving a REPL, but its verdict is the easy
+one to trust — the file either compiles against the Mathlib you pinned or
+it does not. Lean messages are parsed into positions and classified, the
+goal state stays attached to its error, and accepted proofs get the `#print
+axioms` audit (a second compile; `-o audit_axioms=false` to skip).
 
 It also builds the statement probes: elaboration, triviality, vacuity and
 gold-equivalence, each constructed from the statement's own binders so it
-asks about the proposition the dataset actually contains.
+asks about the proposition the problem actually contains.
 
 ```bash
 export FTP_EVAL_LEAN_PROJECT=~/mathlib-project   # lake exe cache get && lake build
@@ -433,8 +424,8 @@ ftp-eval doctor -b lean4
 
 Ships as **plumbing, not an integration**. Auth, retries, timeouts, error
 classification and response mapping are here; the field names are not,
-because these APIs are not stable public standards and guessing them is
-how a harness reports `failed` for proofs that were actually accepted. An
+because these APIs are not stable public standards and guessing them is how
+a harness reports `failed` for proofs that were actually accepted. An
 unrecognized response shape raises rather than defaulting.
 
 ```python
@@ -456,11 +447,13 @@ class MyProver(Verifier):
 ```
 
 Assembly, soundness screening, timing, timeouts and error wrapping come
-from the base class. Soundness screening is **not** opt-out-able.
+from the base class, and soundness screening is not opt-out-able. What a
+backend does **not** do is measure the proof — that belongs to
+`proving/analysis/`, so your backend stays a thin adapter.
 
 ## Interpreting results
 
-| proof status | meaning |
+| answer status | meaning |
 |---|---|
 `verified` | accepted, and no reward hacking found |
 `rejected` | the prover accepted it, but it does not count — see `soundness.violations` |
@@ -469,35 +462,40 @@ from the base class. Soundness screening is **not** opt-out-able.
 `error` | prover or harness broke; **excluded from the denominator** |
 `skipped` | never attempted |
 
-| combined status | meaning |
+| match verdict | meaning |
 |---|---|
-`solved` | faithful statement **and** valid proof. The only success |
-`proved_wrong_statement` | valid proof of an unfaithful statement. Scores zero; this is what a proof-only harness counts as a win |
-`unproved` | faithful statement, no valid proof. An honest miss |
-`bad_statement` | formalization malformed or degenerate |
-`hacked_proof` | proof was reward hacking |
-`unverifiable` | proof valid but faithfulness never assessed, so no solve is claimed |
+`matched` | states the theorem that was set, and supplies a proof |
+`matched_but_unproved` | right statement, no proof. An honest miss |
+`mismatched` | states something else — the mismatch names which property |
+`missing` | the target theorem is not in the file |
+`unparsed` | the file could not be read as Lean |
+
+A `matched` at stage 1 is **not** a claim that the proof works. Only stage
+2 can say that, and `kernel_checked` records whether it ran.
 
 ## Limitations
 
 Stated plainly, since the point is trustworthy numbers.
 
+* **Nothing here has run against a real Lean toolchain or real model
+  output.** The reward-hacking patterns are implemented and tested against
+  fixtures; they are not an empirical finding about what models do.
 * **The syntactic screen is not complete.** It catches the known tricks. A
   novel one will get past it — which is why the Lean axiom audit exists,
-  and why `hack_patterns` names the specific trick so the list can grow.
+  and why each detection names the specific trick so the list can grow.
 * **Statement matching is textual.** A semantically equivalent
-  reformulation gets flagged. That is the better failure direction: a
-  `rejected` row is reviewable, a false `verified` is not.
+  reformulation gets flagged at stage 1. That is the better failure
+  direction, and stage 2 settles it: a refusal is reviewable, a false
+  `verified` is not.
 * **The judge can be wrong in both directions.** Consensus and rechecking
   reduce it; they do not remove it. Audit the `UNSURE` and `UNFAITHFUL`
   items before trusting a headline.
 * **Structural metrics are lexical.** Declaration and comment counts are
   exact; nesting and branch counts assume conventional formatting.
 * **The `axle` backend is unverified against a live service.**
-* **No sandbox.** A backend runs a prover on model-generated input, and
-  Lean can read files and shell out. Run untrusted attempts in a container.
-* **pass@k assumes i.i.d. draws** at one temperature. Mixed settings or
-  deduplicated samples break the estimator's assumption.
+* **No sandbox.** A backend runs a prover on participant-supplied input,
+  and Lean can read files and shell out. Grade untrusted submissions in a
+  container.
 
 ## License
 
