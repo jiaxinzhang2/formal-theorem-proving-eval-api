@@ -1,23 +1,21 @@
-"""The contracts. Read this package to understand the system.
+"""The contracts. Read this first.
 
-Pure interface: abstract base classes and the data shapes they exchange, no
-logic. Every implementation in the package plugs into one of these, so this
-is the short version of the whole design.
+Three abstract base classes and the shapes they exchange. Each one is
+actually subclassed by real code -- an ABC nobody implements is not a
+contract, it is a second place to edit -- and
+``tests/test_layering.py`` fails if that stops being true.
 
---------------------------------------------------------------------------
 The picture
 --------------------------------------------------------------------------
 
 ::
 
-    Benchmark                    SubmissionSource
-    (a folder of Lean files)     (a folder per participant)
+    Benchmark                    a folder per participant
+    (a folder of Lean files)     (plain Submission objects)
         │                             │
         └──────────┬──────────────────┘
                    ▼
-            ┌──────────────┐
-            │  GradingRun  │   runs every answer through the stages
-            └──────┬───────┘
+              grade_contest        runs every answer through the stages
                    │
       ┌────────────┼────────────┐
       ▼            ▼            ▼
@@ -31,58 +29,57 @@ The picture
             (the results folder)
 
 --------------------------------------------------------------------------
-The four contracts
+The three contracts
 --------------------------------------------------------------------------
-
-:class:`~ftp_eval.spec.benchmark.Benchmark`
-    What a problem set provides: ids, sources, per-problem metadata, a
-    manifest. Implemented by
-    :class:`~ftp_eval.proving.grading.sources.DirectoryBenchmark` -- a folder of
-    Lean files, one theorem per file. Anything else that can answer those
-    questions works too.
-
-:class:`~ftp_eval.spec.benchmark.SubmissionSource`
-    What a set of submissions provides: participants, and each one's
-    answers keyed by problem id, plus the files that matched no problem.
 
 :class:`~ftp_eval.spec.stage.GradingStage`
-    The uniform shape of a stage. All three have it, which is what makes
-    the pipeline a loop rather than three special cases. A stage declares
-    its number and name, says whether it can run, and returns a
-    :class:`~ftp_eval.spec.stage.StageResult`.
+    The uniform shape of a stage: it declares its ``id``, what it
+    ``requires``, and returns a :class:`StageResult` rather than raising.
+    That uniformity is what makes the pipeline a loop instead of three
+    special cases, and it is why ``NOT_RUN`` is a first-class outcome --
+    a stage that could not run is not evidence either way.
+
+    Implemented by :class:`~ftp_eval.proving.grading.pipeline.MatchStage`
+    and :class:`~ftp_eval.proving.grading.pipeline.CompileStage`. This is
+    the contract with more than one implementation, which is what an ABC
+    is really for.
+
+:class:`~ftp_eval.spec.benchmark.Benchmark`
+    What a problem set provides: ids in a stable order, sources, a content
+    hash per problem, per-problem metadata, a manifest. Implemented by
+    :class:`~ftp_eval.proving.grading.contest.ProblemSet` -- a folder of
+    Lean files, one theorem per file.
 
 :class:`~ftp_eval.spec.artifacts.ArtifactWriter`
-    Where conclusions go. Implemented by
+    What a grading run must record. The requirements live in the method
+    docstrings because they are design decisions, not formatting: both the
+    *declared* and the *observed* toolchain, every answer's conclusion at
+    every stage it reached, and the exact source any prover was given.
+    Implemented by
     :class:`~ftp_eval.proving.grading.artifacts.RunDirectory`.
 
---------------------------------------------------------------------------
-Two rules the contracts encode
+Submissions have no ABC. A submission is one participant's answers keyed
+by problem id -- :class:`~ftp_eval.proving.grading.contest.Submission`, a
+plain dataclass. There was an ABC for it and nothing ever implemented it,
+so it is gone; a dataclass that carries no behaviour needs no contract.
+
+What is deliberately *not* here
 --------------------------------------------------------------------------
 
-**Stages run in order and stop early.** ``GradingStage.requires`` names the
-stage that must have passed first. Compiling an answer that does not state
-the theorem is wasted work, and a compile that *succeeds* on the wrong
-theorem reads like a pass -- which is the confusion the whole pipeline
-exists to remove.
-
-**A stage that could not run says so.** :class:`StageStatus` has
-``NOT_RUN`` as well as ``PASSED`` and ``FAILED``, and it is never collapsed
-into either. "No prover was configured" and "the prover rejected it" are
-different facts, and a grader that conflated them would report unverified
-answers as correct.
+The verifier interface. A prover is not part of the grading pipeline's
+contract -- both APIs talk to one, so it lives a layer down in
+``ftp_eval.backends``.
 """
 
 from __future__ import annotations
 
 from .artifacts import ArtifactWriter
-from .benchmark import Benchmark, BenchmarkProblem, SubmissionSource, SubmittedAnswer
-from .stage import GradingStage, StageContext, StageResult, StageStatus, StageId
+from .benchmark import Benchmark, BenchmarkProblem
+from .stage import GradingStage, StageContext, StageId, StageResult, StageStatus
 
 __all__ = [
     "Benchmark",
     "BenchmarkProblem",
-    "SubmissionSource",
-    "SubmittedAnswer",
     "GradingStage",
     "StageContext",
     "StageResult",

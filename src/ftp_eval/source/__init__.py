@@ -10,8 +10,12 @@ makes it safe for both APIs to sit on.
                           is not mistaken for code.
     lean_file.py          one Lean file -> declarations, with their
                           signatures, bodies, attributes and answer holes
-    soundness.py          screening source for reward hacking, and the
-                          report that comes back
+    soundness.py          screening source for constructs that make a
+                          prover's verdict hollow, and the report that
+                          comes back. Proofs are screened for all 27
+                          patterns; problem statements for the 18 that
+                          apply to a statement -- see the module docstring,
+                          the asymmetry is load bearing.
     statement_metrics.py  a statement's shape: binders, quantifiers,
                           connectives, conclusion size
 

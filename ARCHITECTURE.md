@@ -81,8 +81,9 @@ src/ftp_eval/
 │   │                        not mistaken for code.
 │   ├── lean_file.py         one Lean file -> declarations, with signatures,
 │   │                        bodies, attributes and answer holes
-│   └── soundness.py         screening source for reward hacking, and the
-│                            report that comes back
+│   └── soundness.py         screening source for what makes a verdict hollow.
+│                            Answers are screened for all 27 patterns,
+│                            problem statements for the 18 that apply to one.
 │
 ├── backends/              TALKING TO A PROVER. Imports source/ only.
 │   ├── types.py             what a prover is asked (ProofTask, StatementTask,

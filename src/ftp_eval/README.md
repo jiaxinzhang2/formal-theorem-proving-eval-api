@@ -27,9 +27,9 @@ backends/                        talking to a prover: the vocabulary, the
                                  Verifier interface, mock / lean4 / axle
         ▼
 source/                          reading formal source text: parsing Lean
-                                 files, comments, reward-hacking screening,
-                                 statement metrics. Imports nothing else.
-spec/                            the contracts. No logic.
+                                 files, comments, source screening.
+                                 Imports nothing else.
+spec/                            the contracts: 3 ABCs, each one subclassed
 ```
 
 Above all of it, and importing it by name: `cli.py`, `registry.py`,

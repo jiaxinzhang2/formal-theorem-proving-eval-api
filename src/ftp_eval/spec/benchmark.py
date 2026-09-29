@@ -12,7 +12,7 @@ import abc
 from dataclasses import dataclass
 from typing import Any, Iterator, Mapping, Sequence
 
-__all__ = ["BenchmarkProblem", "Benchmark", "SubmittedAnswer", "SubmissionSource"]
+__all__ = ["BenchmarkProblem", "Benchmark"]
 
 
 @dataclass(frozen=True)
@@ -98,44 +98,3 @@ class Benchmark(abc.ABC):
 
     def __contains__(self, problem_id: object) -> bool:
         return problem_id in set(self.problem_ids())
-
-
-@dataclass(frozen=True)
-class SubmittedAnswer:
-    """One participant's answer to one problem."""
-
-    participant: str
-    problem_id: str
-    source: str
-    origin: str = ""
-
-
-class SubmissionSource(abc.ABC):
-    """The answers to be graded.
-
-    ``unrecognized`` is part of the contract, not an afterthought. A
-    participant who misnames a file has done work that would otherwise
-    vanish silently, and a grader that cannot report it is one nobody can
-    appeal to.
-    """
-
-    @abc.abstractmethod
-    def participants(self) -> Sequence[str]:
-        """Every participant, in a stable order."""
-
-    @abc.abstractmethod
-    def answers(self, participant: str) -> Sequence[SubmittedAnswer]:
-        """One participant's answers, in problem-id order."""
-
-    def unrecognized(self, participant: str) -> Sequence[str]:
-        """Files that matched no problem id. Reported, never dropped."""
-        return ()
-
-    # -- provided ------------------------------------------------------
-
-    def all_answers(self) -> Iterator[SubmittedAnswer]:
-        for participant in self.participants():
-            yield from self.answers(participant)
-
-    def __len__(self) -> int:
-        return sum(len(self.answers(p)) for p in self.participants())
