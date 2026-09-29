@@ -89,6 +89,70 @@ Vacuous hypotheses are handled on the *statement* side (`ProbeKind.VACUOUS`),
 because there the proof is genuinely valid and only the statement is at
 fault.
 
+## Two Lean files: does `answer.lean` prove `theorem.lean`?
+
+The input contract for a formal-conjectures-style setup: a problem file and
+a submitted file, one theorem per problem.
+
+```bash
+ftp-eval match theorem.lean answer.lean
+```
+
+```
+target:  demo_least_N_3
+verdict: mismatched
+text screen: mismatched
+answer(s) submitted: 4
+definitions: changed=1
+  FATAL dependency_changed  abbrev IsSumDistinctSet is defined differently in
+                            the answer, so the theorem no longer means what it says
+    expected: ... := A ⊆ Finset.Icc 1 N ∧ (fun (⟨S, _⟩ : A.powerset) => S.sum id).Injective
+    actual:   ... := True
+  The answer may compile perfectly on its own; what it does not do is state
+  the theorem that was set.
+```
+
+The question is **what the answer proves**, not whether it compiles — the
+example above compiles fine. Answered in two stages, and when they disagree
+the kernel wins:
+
+| stage | what it does | needs a prover |
+|---|---|---|
+text screen | signatures compared after normalizing `answer(...)` holes and whitespace; definitions diffed; helpers checked; reward hacking screened | no |
+kernel confirmation | states the **theorem's** proposition and closes it with the **answer's** proof term — if that typechecks, the answer proves the theorem whatever the texts look like | yes (`-b lean4`) |
+
+Four properties of the format make the naive answer wrong, and each one is
+handled:
+
+**`theorem.lean` introduces definitions.** It is not just a statement: the
+`abbrev`s and `def`s the statement is written in terms of are the problem's
+vocabulary. An answer that redefines one has changed the problem while
+leaving the theorem's text byte-identical. So the theorem file is the
+authority on them — including when building the confirmation probe, which
+would otherwise compile the answer against its own gutted definitions and
+confirm a claim nobody asked for.
+
+**`answer.lean` may introduce many more.** A real proof brings its own
+machinery, and none of it is penalised — the report just counts it
+(`definitions: added=2, unchanged=1`). What grows with it is the number of
+places to hide an unproved assumption, so a helper the target *cites* but
+leaves `sorry`-backed is fatal, while an uncited one is reported as dead
+weight.
+
+**`sorry` in `theorem.lean` is legitimate.** An open conjecture is *stated*
+that way. So a right statement with no proof is `matched_but_unproved` — an
+honest miss, not tampering and not cheating.
+
+**`answer(sorry)` is a hole the answer fills.** `= answer(sorry)` becomes
+`= answer(4)`, so the statement legitimately changes and verbatim comparison
+would flag every solved problem. The holes are normalized away; everything
+else — binders, implicitness, bounds, `=` vs `≤` — is compared exactly.
+
+Runnable fixtures in [examples/lean-files/](examples/lean-files/): an honest
+answer, one with helper definitions, one that weakens the claim, one that
+guts a definition, one that leaves a cited helper unproved, one with no
+proof yet.
+
 ## Layout
 
 The package is organized along the two links, so the structure shows the

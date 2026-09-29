@@ -76,3 +76,22 @@ jobs:
             --out /tmp/combined.jsonl --quiet | tee /tmp/combined.txt
           grep -q "proved_wrong_statement" /tmp/combined.txt || {
             echo "expected the unfaithful-statement fixture to be caught"; exit 1; }
+
+      # Two-file matching: does answer.lean prove theorem.lean? The
+      # fixtures include an answer that compiles on its own but guts a
+      # definition, so a clean exit here would mean the check is not working.
+      - name: Smoke test theorem/answer matching
+        run: |
+          ftp-eval match examples/lean-files/theorem.lean \
+            examples/lean-files/answer-good.lean \
+            examples/lean-files/answer-with-helpers.lean \
+            examples/lean-files/answer-unproved.lean | tee /tmp/match-ok.txt
+          grep -q "verdict: statement_matches_unverified_proof" /tmp/match-ok.txt
+          grep -q "matched_but_unproved" /tmp/match-ok.txt
+          if ftp-eval match --strict examples/lean-files/theorem.lean \
+               examples/lean-files/answer-gutted.lean \
+               examples/lean-files/answer-weakened.lean \
+               examples/lean-files/answer-smuggled.lean --quiet; then
+            echo "expected a non-zero exit: these answers do not prove the theorem"
+            exit 1
+          fi

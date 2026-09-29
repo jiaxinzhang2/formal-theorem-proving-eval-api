@@ -24,7 +24,6 @@ __all__ = [
     "load_results",
     "load_triplets",
     "ResultWriter",
-    "attempts_from_samples",
     "already_done",
 ]
 
@@ -139,19 +138,6 @@ class ResultWriter:
 
     def __exit__(self, *exc_info: Any) -> None:
         self.close()
-
-
-def attempts_from_samples(
-    task_id: str,
-    samples: Sequence[str],
-    *,
-    model: str | None = None,
-) -> list[ProofAttempt]:
-    """Turn k raw completions for one task into numbered attempts."""
-    return [
-        ProofAttempt(task_id=task_id, proof=text, model=model, sample_index=i)
-        for i, text in enumerate(samples)
-    ]
 
 
 def load_triplets(

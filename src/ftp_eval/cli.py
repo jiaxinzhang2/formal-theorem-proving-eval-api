@@ -27,6 +27,7 @@ from .pipeline import EndToEndRunner, EndToEndStatus, format_end_to_end
 from .registry import available, available_judges, create, create_judge
 from .proving.runner import EvalRunner, ProgressEvent, RunConfig
 from .formalizing.checker import StatementChecker, format_statement_summary
+from .formalizing.matching import SubmissionMatcher, match_submission
 from .types import ProofAttempt, ProofTask, StatementStatus, Status
 from .proving.verifier import assemble_source, screen_soundness
 
@@ -393,6 +394,62 @@ def cmd_eval_all(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+def cmd_match(args: argparse.Namespace) -> int:
+    """Does answer.lean answer theorem.lean?
+
+    The input contract: two Lean files, one theorem per problem file. Not
+    "does the answer compile" -- a file can compile perfectly and have
+    quietly restated the theorem.
+    """
+    problem_source = Path(args.theorem).read_text(encoding="utf-8")
+    reports = []
+    for answer_path in args.answer:
+        answer_source = Path(answer_path).read_text(encoding="utf-8")
+        report = match_submission(
+            problem_source,
+            answer_source,
+            target=args.target,
+            require_proof=not args.allow_unproved,
+        )
+        reports.append((answer_path, report))
+        if not args.quiet:
+            print("== %s" % answer_path)
+            print(report.format_text())
+            print()
+
+    if args.show_probe:
+        # The prover-backed confirmation: state the problem's theorem and
+        # close it with the submission's proof term. Printed rather than
+        # compiled, since compiling needs a Lean project.
+        path, _ = reports[0]
+        probe = SubmissionMatcher().build_confirmation_source(
+            problem_source,
+            Path(path).read_text(encoding="utf-8"),
+            target=args.target,
+        )
+        print("== prover confirmation source for %s" % path)
+        print(probe if probe else "(could not be assembled; read that as NOT confirmed)")
+        print()
+
+    if args.out:
+        write_jsonl(
+            args.out,
+            [{"answer_file": path, **report.to_dict()} for path, report in reports],
+        )
+        print("wrote %d verdict(s) to %s" % (len(reports), args.out), file=sys.stderr)
+
+    counts: dict[str, int] = {}
+    for _, report in reports:
+        counts[report.status.value] = counts.get(report.status.value, 0) + 1
+    print("summary: " + ", ".join("%s=%d" % kv for kv in sorted(counts.items())))
+
+    if args.strict and any(
+        not report.status.answers_the_problem for _, report in reports
+    ):
+        return EXIT_UNSOUND
+    return EXIT_OK
+
+
 def cmd_score(args: argparse.Namespace) -> int:
     results = load_results(args.results)
     summary = summarize(results, ks=_parse_ks(args.k), include_per_task=args.unsolved)
@@ -526,6 +583,37 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_score.add_argument("--strict", action="store_true")
     p_score.set_defaults(func=cmd_score)
+
+    p_match = sub.add_parser(
+        "match",
+        help="check whether a submitted Lean file answers the problem's Lean file",
+    )
+    p_match.add_argument("theorem", help="the problem file, e.g. theorem.lean")
+    p_match.add_argument(
+        "answer", nargs="+", help="the submitted file(s), e.g. answer.lean"
+    )
+    p_match.add_argument(
+        "--target",
+        help="theorem name under test. Not needed for the one-problem-per-file "
+        "convention; supply it only when a file holds several statements",
+    )
+    p_match.add_argument(
+        "--allow-unproved",
+        action="store_true",
+        help="do not require a proof, i.e. only check that the statement matches",
+    )
+    p_match.add_argument(
+        "--show-probe",
+        action="store_true",
+        help="print the prover-backed confirmation source for the first submission: "
+        "the problem's theorem closed with the submission's proof term",
+    )
+    p_match.add_argument("--out", help="write verdicts here as JSONL")
+    p_match.add_argument("--quiet", action="store_true")
+    p_match.add_argument(
+        "--strict", action="store_true", help="exit non-zero unless every submission matches"
+    )
+    p_match.set_defaults(func=cmd_match)
 
     p_judges = sub.add_parser("judges", help="list faithfulness judges")
     p_judges.add_argument("--json", action="store_true")

@@ -15,8 +15,8 @@ from typing import Any, Mapping, Sequence
 
 from ..analysis.modes import classify_failure, classify_success
 from ..analysis.structure import analyze_proof, analyze_statement
-from ..soundness import PATTERNS, HackClass, screen_source, strip_comments
 from ..analysis.tactics import extract_tactics
+from ..soundness import screen_source
 from ..types import (
     Assembly,
     BackendInfo,
@@ -39,8 +39,6 @@ __all__ = [
     "RawVerdict",
     "assemble_source",
     "screen_soundness",
-    "strip_comments",
-    "PLACEHOLDER_PATTERNS",
 ]
 
 
@@ -50,19 +48,6 @@ class VerifierError(RuntimeError):
 
 class BackendUnavailable(VerifierError):
     """The prover or service this backend needs is not usable here."""
-
-
-#: Kept for backwards compatibility; the live check set lives in
-#: :mod:`ftp_eval.soundness`, which covers far more than placeholders.
-PLACEHOLDER_PATTERNS: dict[str, tuple[str, ...]] = {
-    language: tuple(
-        p.pattern.pattern for p in soundness_patterns if p.hack_class is HackClass.PLACEHOLDER
-    )
-    for language, soundness_patterns in (
-        (lang, [p for p in PATTERNS if lang in p.languages])
-        for lang in ("lean4", "lean3", "coq", "isabelle", "axle")
-    )
-}
 
 
 def assemble_source(task: ProofTask, attempt: ProofAttempt) -> str:

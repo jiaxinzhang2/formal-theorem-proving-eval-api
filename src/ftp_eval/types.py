@@ -14,7 +14,7 @@ import hashlib
 import json
 from dataclasses import asdict, dataclass, field
 from enum import Enum
-from typing import Any, Iterable, Mapping, Sequence
+from typing import Any, Iterable, Mapping
 
 __all__ = [
     "Assembly",
@@ -28,7 +28,6 @@ __all__ = [
     "VerificationResult",
     "BackendInfo",
     "index_attempts",
-    "dedupe_by_id",
     # statement-level vocabulary
     "StatementTask",
     "ProbeKind",
@@ -730,16 +729,4 @@ def index_attempts(attempts: Iterable[ProofAttempt]) -> dict[str, list[ProofAtte
     out: dict[str, list[ProofAttempt]] = {}
     for a in attempts:
         out.setdefault(a.task_id, []).append(a)
-    return out
-
-
-def dedupe_by_id(items: Sequence[ProofTask]) -> list[ProofTask]:
-    """Drop duplicate task ids, keeping the first occurrence."""
-    seen: set[str] = set()
-    out: list[ProofTask] = []
-    for t in items:
-        if t.task_id in seen:
-            continue
-        seen.add(t.task_id)
-        out.append(t)
     return out

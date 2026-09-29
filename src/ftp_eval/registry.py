@@ -21,7 +21,6 @@ from .proving.verifier import Verifier
 
 __all__ = [
     "register",
-    "unregister",
     "create",
     "available",
     "load_entry_points",
@@ -49,10 +48,6 @@ def register(name: str, factory: Callable[..., Verifier], *, overwrite: bool = F
     if not overwrite and name in _REGISTRY:
         raise ValueError("backend %r is already registered" % name)
     _REGISTRY[name] = factory
-
-
-def unregister(name: str) -> None:
-    _REGISTRY.pop(name, None)
 
 
 def load_entry_points() -> None:

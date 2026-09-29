@@ -17,7 +17,8 @@ from ftp_eval import (
     create,
     screen_soundness,
 )
-from ftp_eval.proving.verifier import assemble_source, strip_comments
+from ftp_eval.comments import strip_comments
+from ftp_eval.proving.verifier import assemble_source
 
 
 def task(statement: str = "theorem t (n : Nat) : n + 0 = n := by", **kw) -> ProofTask:
