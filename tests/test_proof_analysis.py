@@ -337,7 +337,7 @@ def test_transitions_appear_in_the_report():
 
 
 def test_counts_binders_by_kind():
-    from ftp_eval.source.statement_metrics import analyze_statement
+    from ftp_eval.proving.analysis.statement_metrics import analyze_statement
 
     c = analyze_statement(
         "theorem t {α : Type} [Ring α] (x : α) (h : 0 < x) : x + 0 = x := by"
@@ -350,7 +350,7 @@ def test_counts_binders_by_kind():
 
 
 def test_counts_quantifiers_and_connectives():
-    from ftp_eval.source.statement_metrics import analyze_statement
+    from ftp_eval.proving.analysis.statement_metrics import analyze_statement
 
     c = analyze_statement("theorem t : ∀ n, n = 0 ∨ 0 < n := by")
     assert c.quantifiers == 1
@@ -358,7 +358,7 @@ def test_counts_quantifiers_and_connectives():
 
 
 def test_measures_the_conclusion_separately_from_the_binders():
-    from ftp_eval.source.statement_metrics import analyze_statement
+    from ftp_eval.proving.analysis.statement_metrics import analyze_statement
 
     simple = analyze_statement("theorem t (n : Nat) : n = n := by")
     complex_ = analyze_statement(
@@ -368,7 +368,7 @@ def test_measures_the_conclusion_separately_from_the_binders():
 
 
 def test_statement_complexity_survives_an_unparseable_statement():
-    from ftp_eval.source.statement_metrics import analyze_statement
+    from ftp_eval.proving.analysis.statement_metrics import analyze_statement
 
     # Token and quantifier counts should still come through rather than
     # the whole measurement returning nothing.

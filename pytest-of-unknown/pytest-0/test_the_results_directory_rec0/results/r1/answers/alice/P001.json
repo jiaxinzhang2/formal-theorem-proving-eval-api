@@ -1,0 +1,91 @@
+{
+  "problem_id": "P001",
+  "participant": "alice",
+  "solved": true,
+  "kernel_checked": false,
+  "stage_reached": "compile",
+  "stage_status": "not_run",
+  "failed_at": null,
+  "reason": "states the theorem and supplies a proof (not compiled)",
+  "compile": {
+    "status": "not_run",
+    "detail": "no prover configured",
+    "compile_time_s": null
+  },
+  "match": {
+    "target": "Demo.demo_thm",
+    "status": "matched",
+    "answers_the_problem": true,
+    "answers": [
+      "1"
+    ],
+    "mismatches": [],
+    "expected_signature": ": IsLeast { n | IsGood n } ␀ANSWER␀",
+    "actual_signature": ": IsLeast { n | IsGood n } ␀ANSWER␀",
+    "problem_declarations": 2,
+    "submission_declarations": 2,
+    "proves_the_theorem": null,
+    "confirmation_detail": "",
+    "verdict": "statement_matches_unverified_proof",
+    "definitions": [
+      {
+        "name": "IsGood",
+        "status": "unchanged",
+        "kind": "abbrev",
+        "load_bearing": true,
+        "expected": "(n : ℕ) : Prop := 0 < n",
+        "actual": "(n : ℕ) : Prop := 0 < n"
+      }
+    ],
+    "definition_counts": {
+      "unchanged": 1
+    }
+  },
+  "metrics": {
+    "tactics": [
+      "exact",
+      "decide",
+      "decide"
+    ],
+    "failure_mode": null,
+    "success_mode": "short_tactic_chain",
+    "structure": {
+      "chars": 34,
+      "lines": 3,
+      "code_lines": 2,
+      "tokens": 9,
+      "max_line_chars": 30,
+      "declarations": {},
+      "auxiliary_declarations": 0,
+      "named_steps": 0,
+      "local_dependency_depth": 0,
+      "cited_lemmas": 0,
+      "calc_blocks": 0,
+      "max_nesting_depth": 1,
+      "branch_points": 0,
+      "term_mode": false,
+      "comment_segments": 0,
+      "block_comments": 0,
+      "doc_comments": 0,
+      "line_comments": 0,
+      "comment_chars": 0,
+      "comment_ratio": 0.0,
+      "distinct_code_lines": 2,
+      "line_repetition_rate": 0.0,
+      "tactic_repetition_rate": 0.3333,
+      "max_consecutive_duplicate_lines": 0,
+      "repeated_trigram_rate": 0.0,
+      "statement_binders": 0,
+      "statement_hypotheses": 0,
+      "statement_implicit_binders": 0,
+      "statement_instance_binders": 0,
+      "statement_conclusion_tokens": 10,
+      "statement_quantifiers": 0,
+      "statement_connectives": 0,
+      "statement_cited_definitions": 0,
+      "statement_distinct_types": 0,
+      "statement_total_tokens": 11,
+      "statement_max_nesting_depth": 1
+    }
+  }
+}

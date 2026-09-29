@@ -53,6 +53,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
 
+from ...spec.artifacts import ArtifactWriter
 from .stages import GradedAnswer
 from .statistics import ContestStatistics
 
@@ -79,7 +80,7 @@ def _tsv(rows: Iterable[Sequence[Any]]) -> str:
 
 
 @dataclass
-class RunDirectory:
+class RunDirectory(ArtifactWriter):
     """Writes one grading run's results."""
 
     root: Path

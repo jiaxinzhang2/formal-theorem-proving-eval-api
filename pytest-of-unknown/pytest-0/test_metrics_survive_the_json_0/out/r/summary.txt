@@ -1,0 +1,7 @@
+answers graded: 2  solved: 0 (0.0%)  kernel-checked: 1
+  1 answer(s) were NOT compiled, so `solved` there means the text screen passed, not that the proof was checked.
+refused at: compile=1, match=1
+top reasons:
+     1  the answer's proof does not close the theorem's proposition
+     1  dependency_changed: abbrev IsGood is defined differently in the answer, so the theorem n
+solved by nobody (2): P001, P002

@@ -18,7 +18,7 @@ from dataclasses import replace
 from typing import Any, Mapping
 
 from ...backends.types import Status, VerificationResult
-from ...source.statement_metrics import analyze_statement
+from .statement_metrics import analyze_statement
 from .modes import classify_failure, classify_success
 from .structure import analyze_proof
 from .tactics import extract_tactics

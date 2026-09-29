@@ -30,7 +30,7 @@ import json
 import platform
 import sys
 import time
-from typing import Any, Callable
+from typing import Callable
 
 from ftp_eval import (
     ProofAttempt,
@@ -43,12 +43,13 @@ from ftp_eval import (
     screen_source,
 )
 from ftp_eval.proving.analysis.structure import sample_duplication
+from ftp_eval.proving.analysis.measure import measure
 from ftp_eval.proving.grading import ProblemSet, Submission, grade_contest
-from ftp_eval.source.comments import strip_comments
 
 #: name -> seconds. A breach means something got much slower, not slightly.
 BUDGETS: dict[str, float] = {
-    "verify: typical proof (all metrics)": 0.010,
+    "verify: one proof (no metrics)": 0.002,
+    "measure: one proof (all metrics)": 0.010,
     "analyze_proof: 13KB proof": 0.100,
     "analyze_proof: 400-step chain": 0.200,
     "analyze_proof: 2000-step chain": 1.000,
@@ -124,14 +125,9 @@ def build_cases() -> list[tuple[str, Callable[[], object], int]]:
     honest_body = long_proof
     sorry_body = long_proof + "\n  sorry"
 
-    results = [
-        backend.verify(
-            task,
-            ProofAttempt(task_id="t", proof=TYPICAL_PROOF + " MOCK_PASS", sample_index=i % 5),
-        )
-        for i in range(200)
-    ]
-    many_results = results * 5
+    # One raw verdict, reused: `measure` is what turns it into metrics, and
+    # grading calls that once per answer.
+    verdict = backend.verify(task, attempt)
     samples = {"t%d" % i: ["a", "a", "b", "c", "d"] for i in range(200)}
 
     # A benchmark the size of the real one: 100 problems, graded for
@@ -154,7 +150,16 @@ def build_cases() -> list[tuple[str, Callable[[], object], int]]:
     twenty_participants = submissions_for(20)
 
     return [
-        ("verify: typical proof (all metrics)", lambda: backend.verify(task, attempt), 20),
+        ("verify: one proof (no metrics)", lambda: backend.verify(task, attempt), 50),
+        (
+            "measure: one proof (all metrics)",
+            lambda: measure(
+                verdict,
+                proof=attempt.proof,
+                formal_statement=task.formal_statement,
+            ),
+            20,
+        ),
         ("analyze_proof: 13KB proof", lambda: analyze_proof(long_proof), 10),
         ("analyze_proof: 400-step chain", lambda: analyze_proof(chain_400), 5),
         ("analyze_proof: 2000-step chain", lambda: analyze_proof(chain_2000), 3),
@@ -208,7 +213,7 @@ def main(argv: list[str] | None = None) -> int:
     # The headline claim: the whole analysis layer is a rounding error next
     # to a real prover, so report it explicitly rather than leaving it to
     # be inferred from the table.
-    per_attempt_ms = measurements["verify: typical proof (all metrics)"] * 1000
+    per_attempt_ms = measurements["measure: one proof (all metrics)"] * 1000
     breaches = [
         (label, seconds, BUDGETS[label])
         for label, seconds in measurements.items()

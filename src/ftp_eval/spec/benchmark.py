@@ -9,7 +9,7 @@ anything that can produce problem ids, sources and metadata will grade.
 from __future__ import annotations
 
 import abc
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, Iterator, Mapping, Sequence
 
 __all__ = ["BenchmarkProblem", "Benchmark", "SubmittedAnswer", "SubmissionSource"]
@@ -65,8 +65,13 @@ class Benchmark(abc.ABC):
     def problem(self, problem_id: str) -> BenchmarkProblem:
         """One problem. Raises ``KeyError`` for an unknown id."""
 
-    def manifest(self) -> Mapping[str, Any]:
+    def manifest_fields(self) -> Mapping[str, Any]:
         """Benchmark-wide declaration: version, toolchain, conventions.
+
+        Named ``manifest_fields`` rather than ``manifest`` so an
+        implementation is free to expose a typed ``manifest`` attribute --
+        which the folder-backed one does, and which a method of the same
+        name would shadow.
 
         Empty is allowed. What it costs is the ability to tie results to a
         Lean/Mathlib version, and the run report says so rather than
@@ -76,7 +81,15 @@ class Benchmark(abc.ABC):
 
     # -- provided ------------------------------------------------------
 
-    def problems(self) -> Iterator[BenchmarkProblem]:
+    def iter_problems(self) -> Iterator[BenchmarkProblem]:
+        """Every problem, in the order ``problem_ids`` gives.
+
+        Named ``iter_problems`` for the same reason ``manifest_fields`` is
+        not ``manifest``: an implementation may hold the problems in an
+        attribute called ``problems``, and a method of that name would be
+        shadowed by it. Wiring the folder-backed implementation to this ABC
+        is what surfaced both collisions.
+        """
         for problem_id in self.problem_ids():
             yield self.problem(problem_id)
 

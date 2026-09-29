@@ -10,7 +10,7 @@ the numbers.
 from __future__ import annotations
 
 import abc
-from typing import Any, Mapping, Sequence
+from typing import Any, Sequence
 
 __all__ = ["ArtifactWriter"]
 
@@ -41,9 +41,13 @@ class ArtifactWriter(abc.ABC):
     def write_report(self, statistics: Any, **fields: Any) -> None:
         """The aggregate, over correct and incorrect answers alike."""
 
-    def write_probe(self, answer: Any, source: str, log: str = "") -> None:
+    def write_probe(  # noqa: B027 - an optional hook, not an abstract method
+        self, answer: Any, source: str, log: str = ""
+    ) -> None:
         """The exact text a prover was given, and what it said back.
 
-        Optional but strongly recommended: a verdict nobody can reproduce
-        is a verdict nobody can appeal.
+        Concrete and empty rather than abstract: a writer that records no
+        probes is still a valid writer, and making every implementation
+        stub this out would be noise. Strongly recommended all the same --
+        a verdict nobody can reproduce is a verdict nobody can appeal.
         """

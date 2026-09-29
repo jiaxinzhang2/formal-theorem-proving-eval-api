@@ -1,6 +1,6 @@
 # Tests
 
-411 tests, no Lean required — everything runs on the `mock` backend.
+413 tests, no Lean required — everything runs on the `mock` backend.
 
 ```bash
 pytest -q                          # all of them
@@ -9,7 +9,7 @@ python tests/measure_speed.py  # the speed numbers, reproducible
 
 | file | what it pins down |
 |---|---|
-`test_layering.py` | **the four layers** — every import goes downward, and the two APIs never reference each other |
+`test_layering.py` | **the four layers** — every import goes downward, the two APIs never reference each other, and `spec/`'s ABCs are actually implemented |
 `test_matching.py` | stage ①: does `answer.lean` state `theorem.lean`? |
 `test_matching_adversarial.py` | **attacks** on stage ①. Every case is one that worked when first tried |
 `test_grading.py` | the three-stage pipeline, the results folder, and that metrics are recorded for refused answers too |

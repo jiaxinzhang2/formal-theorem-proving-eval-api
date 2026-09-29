@@ -48,7 +48,7 @@ from __future__ import annotations
 __version__ = "0.1.0"
 
 from .autoformalization.checker import StatementChecker
-from .source.statement_metrics import StatementComplexity, analyze_statement
+from .proving.analysis.statement_metrics import StatementComplexity, analyze_statement
 from .autoformalization.judge import ConsensusJudge, Judge, JudgeError, MockJudge
 from .source.comments import strip_comments
 from .io import read_jsonl, write_jsonl

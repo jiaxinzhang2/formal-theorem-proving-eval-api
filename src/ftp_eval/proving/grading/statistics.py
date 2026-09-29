@@ -18,7 +18,7 @@ from __future__ import annotations
 
 from collections import Counter
 from dataclasses import dataclass, field
-from typing import Any, Mapping, Sequence
+from typing import Any, Sequence
 
 from .stages import GradedAnswer, Stage, StageStatus
 

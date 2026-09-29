@@ -25,7 +25,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
 
-from ..matching import MatchStatus, MismatchKind, match_submission
+from ..matching import MatchStatus, MismatchKind
 from .artifacts import RunDirectory
 
 from .metadata import (
@@ -36,13 +36,14 @@ from .metadata import (
     parse_problem_metadata,
     reconcile_toolchain,
 )
+from ...spec.benchmark import Benchmark, BenchmarkProblem
 from ...spec.stage import StageContext, StageId
 from .pipeline import run_stages
 from ...backends.types import Diagnostic, Severity, Status
 from ...source.lean_file import parse_lean_file
 from ..analysis.measure import proof_metrics
 from ..analysis.modes import classify_failure, classify_success
-from .stages import GradedAnswer, Stage, StageStatus
+from .stages import GradedAnswer, Stage
 from .statistics import ContestStatistics, summarize_contest
 
 __all__ = [
@@ -64,7 +65,7 @@ AnswerGrade = GradedAnswer
 
 
 @dataclass(frozen=True)
-class ProblemSet:
+class ProblemSet(Benchmark):
     """The setter's benchmark: a folder of Lean files, one theorem each."""
 
     problems: Mapping[str, str]
@@ -76,6 +77,34 @@ class ProblemSet:
 
     def ids(self) -> tuple[str, ...]:
         return tuple(sorted(self.problems))
+
+    # -- the Benchmark contract ----------------------------------------
+
+    @property
+    def name(self) -> str:
+        return self.manifest.name or (self.root.name if self.root else "")
+
+    def problem_ids(self) -> tuple[str, ...]:
+        return self.ids()
+
+    def problem(self, problem_id: str) -> BenchmarkProblem:
+        """One problem, with everything needed to cite it later.
+
+        The content hash comes from the source, so a published result ties
+        to the exact text that was graded rather than to a filename that
+        may have been edited since.
+        """
+        entry = self.metadata.get(problem_id)
+        return BenchmarkProblem(
+            problem_id=problem_id,
+            source=self.problems[problem_id],
+            target=entry.theorem_name or None if entry is not None else None,
+            metadata=entry,
+            origin=str(self.root / ("%s.lean" % problem_id)) if self.root else "",
+        )
+
+    def manifest_fields(self) -> Mapping[str, Any]:
+        return self.manifest.to_dict()
 
     def source_for(self, problem_id: str) -> str:
         """The problem file's Lean source."""

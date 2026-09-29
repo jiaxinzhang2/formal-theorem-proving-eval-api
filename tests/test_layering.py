@@ -116,3 +116,50 @@ def test_every_layer_exists_and_is_a_package(layer):
     directory = ROOT / layer
     assert directory.is_dir(), "%s/ is missing" % layer
     assert (directory / "__init__.py").exists(), "%s/ has no __init__.py" % layer
+
+
+# -- spec/ is a contract, not a description of one --------------------
+
+
+def test_the_spec_abcs_are_actually_implemented():
+    """An ABC nobody subclasses cannot stop anything from drifting.
+
+    Both of these said in their docstrings which class implemented them,
+    and neither was subclassed -- so the docstrings were simply false, and
+    `spec/` was decoration. Wiring them up immediately surfaced two name
+    collisions (`manifest`, `problems`), which is the whole argument for
+    having the check.
+    """
+    from ftp_eval.proving.grading.artifacts import RunDirectory
+    from ftp_eval.proving.grading.contest import ProblemSet
+    from ftp_eval.spec import ArtifactWriter, Benchmark
+
+    assert issubclass(ProblemSet, Benchmark)
+    assert issubclass(RunDirectory, ArtifactWriter)
+
+
+def test_a_dataclass_field_never_shadows_a_contract_method():
+    """The collision that wiring the ABC up revealed.
+
+    ``ProblemSet`` holds ``problems`` (a mapping) and ``manifest`` (a typed
+    object) as fields. If the ABC named its iterator ``problems()`` or its
+    accessor ``manifest()``, the fields would shadow them and a caller
+    would get "'dict' object is not callable" at runtime rather than
+    anything a type checker flags.
+    """
+    from ftp_eval.proving.grading.contest import ProblemSet
+    from ftp_eval.spec import Benchmark
+
+    fields = set(ProblemSet.__dataclass_fields__)
+    methods = {
+        name
+        for name in vars(Benchmark)
+        if not name.startswith("_") and callable(getattr(Benchmark, name, None))
+    }
+    clashes = fields & methods
+    assert not clashes, "field shadows a contract method: %s" % ", ".join(sorted(clashes))
+
+    problem_set = ProblemSet(problems={"P001": "theorem t : True := by sorry"})
+    assert [p.problem_id for p in problem_set.iter_problems()] == ["P001"]
+    assert problem_set.problem("P001").content_hash
+    assert "language" in problem_set.manifest_fields()

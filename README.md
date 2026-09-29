@@ -7,7 +7,7 @@ defend the numbers afterwards.
 
 | you want to | go to |
 |---|---|
-understand the design | [ARCHITECTURE.md](ARCHITECTURE.md), then [`src/ftp_eval/spec/`](src/ftp_eval/spec/) — the contracts, no logic |
+understand the design | [ARCHITECTURE.md](ARCHITECTURE.md), then [`src/ftp_eval/spec/`](src/ftp_eval/spec/) — the contracts, as ABCs the real classes implement |
 run a contest: N Lean problems, many participants | [`benchmarks/README.md`](benchmarks/README.md) |
 grade one answer against one problem | `ftp-eval match theorem.lean answer.lean` |
 see every verdict on a worked example | [`examples/README.md`](examples/README.md) |
@@ -348,9 +348,13 @@ measured, budgeted and enforced rather than assumed.
 
 | | |
 |---|---|
-whole layer, per answer | **0.10 ms** |
+a backend verdict, no metrics | 0.10 ms |
+measuring one answer, every metric | **0.24 ms** |
 100 problems × 20 participants, all three stages | 0.94 s |
 one `lake env lean` compile, for scale | 1–60 s |
+
+The first two rows are separate because the code is: a backend reports what
+the prover said, and `proving/analysis/measure.py` turns that into metrics.
 
 ```bash
 python tests/measure_speed.py           # the numbers, reproducible

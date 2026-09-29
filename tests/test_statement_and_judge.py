@@ -13,7 +13,6 @@ from ftp_eval import (
     JudgeLabel,
     MockJudge,
     ProbeKind,
-    ProofAttempt,
     StatementChecker,
     StatementStatus,
     StatementTask,

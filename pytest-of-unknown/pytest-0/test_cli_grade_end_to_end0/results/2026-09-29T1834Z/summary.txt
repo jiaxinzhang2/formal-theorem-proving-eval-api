@@ -1,0 +1,7 @@
+answers graded: 3  solved: 1 (33.3%)  kernel-checked: 2
+  1 answer(s) were NOT compiled, so `solved` there means the text screen passed, not that the proof was checked.
+refused at: match=1, compile=1
+top reasons:
+     1  matched_but_unproved
+     1  the answer's proof does not close the theorem's proposition
+solved by nobody (1): P002

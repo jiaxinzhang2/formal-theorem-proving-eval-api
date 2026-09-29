@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import pytest
 
-from ftp_eval.proving.matching import MatchStatus, MismatchKind, match_submission
+from ftp_eval.proving.matching import MismatchKind, match_submission
 
 PROBLEM = """\
 module

@@ -6,7 +6,7 @@ import json
 
 import pytest
 
-from ftp_eval import ProofAttempt, ProofTask, Status, available, create, write_jsonl
+from ftp_eval import ProofAttempt, ProofTask, Status, available, create
 from ftp_eval.backends.axle import AxleVerifier
 from ftp_eval.cli import EXIT_OK, EXIT_UNSOUND, EXIT_USAGE, main
 from ftp_eval.backends.verifier import VerifierError

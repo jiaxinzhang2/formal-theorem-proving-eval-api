@@ -68,10 +68,12 @@ src/ftp_eval/
 ├── registry.py            name -> backend or judge ("lean4", "claude")
 ├── io.py                  read and write JSONL
 │
-├── spec/                  THE CONTRACTS. Pure interface, no logic.
-│   ├── benchmark.py         what a benchmark and a problem set provide
+├── spec/                  THE CONTRACTS. ABCs the real classes subclass,
+│   │                      so a drift breaks the build rather than a docstring.
+│   ├── benchmark.py         what a benchmark provides. ProblemSet implements it.
 │   ├── stage.py             what a pipeline stage provides
-│   └── artifacts.py         what a results directory contains
+│   └── artifacts.py         what a results directory contains. RunDirectory
+│                            implements it.
 │
 ├── source/                READING FORMAL SOURCE TEXT. Imports nothing else.
 │   ├── comments.py          what counts as a comment, per language.
@@ -79,10 +81,8 @@ src/ftp_eval/
 │   │                        not mistaken for code.
 │   ├── lean_file.py         one Lean file -> declarations, with signatures,
 │   │                        bodies, attributes and answer holes
-│   ├── soundness.py         screening source for reward hacking, and the
-│   │                        report that comes back
-│   └── statement_metrics.py a statement's shape: binders, quantifiers,
-│                            connectives, conclusion size
+│   └── soundness.py         screening source for reward hacking, and the
+│                            report that comes back
 │
 ├── backends/              TALKING TO A PROVER. Imports source/ only.
 │   ├── types.py             what a prover is asked (ProofTask, StatementTask,
@@ -102,6 +102,7 @@ src/ftp_eval/
 │   │   ├── tactics.py         which tactics, how often
 │   │   ├── structure.py       lemmas, dependency depth, comments, duplication
 │   │   ├── modes.py           why a proof failed, or how it succeeded
+│   │   ├── statement_metrics.py  a statement's shape, used as a difficulty axis
 │   │   └── stats.py           distributions, point-biserial correlation
 │   └── grading/             STAGES 2 and 3, and the pipeline over all three
 │       ├── pipeline.py        stage sequencing; NOT_RUN as a real outcome

@@ -7,12 +7,10 @@ what a prover is asked and what it answers -- is in ``shared/types.py``.
 
 from __future__ import annotations
 
-import json
-from dataclasses import asdict, dataclass, field
+from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Mapping
 
-from ..backends.types import ProbeKind
 
 __all__ = [
     "CheckKind",
