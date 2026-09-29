@@ -39,11 +39,12 @@ from ftp_eval import (
     analyze_statement,
     create,
     extract_tactics,
+    match_submission,
     screen_source,
-    summarize,
 )
 from ftp_eval.proving.analysis.structure import sample_duplication
-from ftp_eval.shared.soundness import strip_comments
+from ftp_eval.proving.grading import ProblemSet, Submission, grade_contest
+from ftp_eval.shared.comments import strip_comments
 
 #: name -> seconds. A breach means something got much slower, not slightly.
 BUDGETS: dict[str, float] = {
@@ -55,9 +56,10 @@ BUDGETS: dict[str, float] = {
     "screen_source: 13KB with a sorry": 0.100,
     "extract_tactics: 13KB proof": 0.050,
     "analyze_statement: typical statement": 0.005,
-    "summarize: 1000 results": 1.000,
     "sample_duplication: 1000 samples": 0.050,
-    "end to end: 1000 attempts + summarize": 10.000,
+    "match_submission: one answer": 0.010,
+    "grade: 100 problems x 1 participant": 2.000,
+    "grade: 100 problems x 20 participants": 20.000,
 }
 
 
@@ -68,6 +70,20 @@ TYPICAL_PROOF = (
     "  nlinarith [key, step, sq_nonneg n]"
 )
 TYPICAL_STATEMENT = "theorem t {α : Type} [LinearOrder α] (n : Nat) (h : 0 < n) : n ^ 2 >= n := by"
+
+#: A problem file and an answer to it, %s-templated on the problem id, in
+#: the shape the grading pipeline reads: one theorem per file.
+PROBLEM_TEMPLATE = (
+    "import Mathlib\n\n"
+    "/-! # %%s\n- mathdb_id: demo.%%s\n- source: speed-fixture\n-/\n\n"
+    "theorem %s : (0 : Nat) <= 1 := by\n  sorry\n"
+)
+ANSWER_TEMPLATE = (
+    "import Mathlib\n\n"
+    "theorem %s : (0 : Nat) <= 1 := by\n"
+    "  have key : (0 : Nat) <= 1 := Nat.zero_le 1\n"
+    "  exact key MOCK_PASS\n"
+)
 
 
 def wide_proof(lines: int) -> str:
@@ -118,19 +134,24 @@ def build_cases() -> list[tuple[str, Callable[[], object], int]]:
     many_results = results * 5
     samples = {"t%d" % i: ["a", "a", "b", "c", "d"] for i in range(200)}
 
-    def end_to_end() -> None:
-        tasks = [
-            ProofTask(task_id="t%d" % i, formal_statement="theorem t%d : True := by" % i)
-            for i in range(200)
-        ]
-        out = [
-            backend.verify(
-                t, ProofAttempt(task_id=t.task_id, proof=" simp MOCK_PASS", sample_index=s)
+    # A benchmark the size of the real one: 100 problems, graded for
+    # every participant, through all three stages.
+    problem_src = PROBLEM_TEMPLATE
+    answer_src = ANSWER_TEMPLATE
+    problem_ids = ["P%03d" % i for i in range(1, 101)]
+    problem_set = ProblemSet(problems={pid: problem_src % pid for pid in problem_ids})
+
+    def submissions_for(n: int) -> list[Submission]:
+        return [
+            Submission(
+                participant="p%02d" % k,
+                answers={pid: answer_src % pid for pid in problem_ids},
             )
-            for t in tasks
-            for s in range(5)
+            for k in range(n)
         ]
-        summarize(out, ks=(1, 5))
+
+    one_participant = submissions_for(1)
+    twenty_participants = submissions_for(20)
 
     return [
         ("verify: typical proof (all metrics)", lambda: backend.verify(task, attempt), 20),
@@ -153,9 +174,22 @@ def build_cases() -> list[tuple[str, Callable[[], object], int]]:
             lambda: analyze_statement(TYPICAL_STATEMENT),
             50,
         ),
-        ("summarize: 1000 results", lambda: summarize(many_results, ks=(1, 5)), 3),
         ("sample_duplication: 1000 samples", lambda: sample_duplication(samples), 10),
-        ("end to end: 1000 attempts + summarize", end_to_end, 1),
+        (
+            "match_submission: one answer",
+            lambda: match_submission(problem_src % "P001", answer_src % "P001"),
+            20,
+        ),
+        (
+            "grade: 100 problems x 1 participant",
+            lambda: grade_contest(problem_set, one_participant, verifier=backend),
+            1,
+        ),
+        (
+            "grade: 100 problems x 20 participants",
+            lambda: grade_contest(problem_set, twenty_participants, verifier=backend),
+            1,
+        ),
     ]
 
 

@@ -37,7 +37,7 @@ from .autoformalization.types import StatementStatus
 from .proving.grading import grade_contest, load_problem_set, load_submissions
 from .proving.matching import SubmissionMatcher
 from .registry import available, available_judges, create, create_judge
-from .shared.io import write_jsonl
+from .io import write_jsonl
 from .shared.types import ProofAttempt, ProofTask, StatementTask, Status
 
 EXIT_OK = 0

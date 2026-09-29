@@ -51,7 +51,7 @@ from .autoformalization.checker import StatementChecker
 from .autoformalization.complexity import StatementComplexity, analyze_statement
 from .autoformalization.judge import ConsensusJudge, Judge, JudgeError, MockJudge
 from .shared.comments import strip_comments
-from .shared.io import read_jsonl, write_jsonl
+from .io import read_jsonl, write_jsonl
 from .proving.analysis.modes import (
     Attribution,
     FailureMode,
@@ -98,7 +98,7 @@ from .registry import (
     register_judge,
 )
 from .shared.soundness import HackClass, audit_axioms, screen_source
-from .shared.stats import Correlation, correlate_with_success, distribution, point_biserial
+from .proving.analysis.stats import Correlation, correlate_with_success, distribution, point_biserial
 from .shared.types import (
     Assembly,
     BackendInfo,

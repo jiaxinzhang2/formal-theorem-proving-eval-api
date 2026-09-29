@@ -13,6 +13,14 @@ public import FormalConjecturesUtil
 - author: jz
 - checked: 2026-09-20
 - contamination: source is public; prior exposure not excluded
+
+## Provenance
+- mathdb_id: demo.002
+- source: demo-2026
+- source_locator: problems/P002.lean
+- difficulty: unrated
+- author: demo
+- prose: Show that for every natural number n, the sum 1 + 2 + ... + n equals n(n+1)/2.
 -/
 
 namespace P002

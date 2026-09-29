@@ -39,6 +39,8 @@ from .types import SoundnessReport
 
 __all__ = [
     "HackClass",
+    "STATEMENT_HACK_CLASSES",
+    "PROOF_HACK_CLASSES",
     "HackPattern",
     "strip_comments",  # re-exported: callers of the screen usually want both
     "screen_source",
@@ -72,6 +74,22 @@ class HackClass(str, Enum):
     HOMOGLYPH = "homoglyph"
 
 
+#: Classes that can make a *statement* mean something other than it
+#: appears to. Deliberately excludes PLACEHOLDER: in this package a problem
+#: file's `sorry` is the hole the participant fills, not a cheat. Also
+#: excludes STATEMENT_TAMPERING, whose `variable` pattern is ordinary Lean
+#: in a problem file, and RESOURCE_UNCAP, which is about proof search.
+STATEMENT_HACK_CLASSES: tuple["HackClass", ...] = (
+    HackClass.NEW_AXIOM,
+    HackClass.KERNEL_BYPASS,
+    HackClass.ELABORATION_TRICK,
+    HackClass.HOMOGLYPH,
+)
+
+#: Everything, which is what a submitted proof is screened for.
+PROOF_HACK_CLASSES: tuple["HackClass", ...] = tuple(HackClass)
+
+
 @dataclass(frozen=True)
 class HackPattern:
     """One syntactic reward-hacking signature."""
@@ -81,6 +99,8 @@ class HackPattern:
     languages: tuple[str, ...]
     pattern: re.Pattern[str]
     #: Shown to the user. Says what was found and why it does not count.
+    #: Carries one ``%s`` for the subject being screened, so the same
+    #: pattern reads correctly whether a proof or a statement tripped it.
     message: str
     #: Lowercase literals, any one of which must appear for the regex to
     #: have a chance of matching. Checked with a substring test before the
@@ -140,7 +160,7 @@ PATTERNS: tuple[HackPattern, ...] = (
         HackClass.PLACEHOLDER,
         _LEAN,
         r"\bsorry\b",
-        "proof contains `sorry`, which Lean accepts with only a warning",
+        "%s contains `sorry`, which Lean accepts with only a warning",
         requires=("sorry",),
         example="theorem t : True := by sorry",
     ),
@@ -149,7 +169,7 @@ PATTERNS: tuple[HackPattern, ...] = (
         HackClass.PLACEHOLDER,
         _LEAN,
         r"\bsorryAx\b",
-        "proof cites `sorryAx` directly, the axiom behind `sorry`",
+        "%s cites `sorryAx` directly, the axiom behind `sorry`",
         requires=("sorryax",),
         example="theorem t : True := sorryAx _",
     ),
@@ -158,7 +178,7 @@ PATTERNS: tuple[HackPattern, ...] = (
         HackClass.PLACEHOLDER,
         _LEAN,
         r"\badmit\b",
-        "proof contains `admit`, which closes the goal without proving it",
+        "%s contains `admit`, which closes the goal without proving it",
         requires=("admit",),
         example="theorem t : True := by admit",
     ),
@@ -167,7 +187,7 @@ PATTERNS: tuple[HackPattern, ...] = (
         HackClass.PLACEHOLDER,
         ("coq",),
         r"\b(Admitted|admit|give_up)\b",
-        "proof is `Admitted` rather than `Qed`, so nothing was proved",
+        "%s is `Admitted` rather than `Qed`, so nothing was proved",
         requires=("admit", "give_up"),
         example="Lemma t : True. Proof. Admitted.",
     ),
@@ -176,7 +196,7 @@ PATTERNS: tuple[HackPattern, ...] = (
         HackClass.PLACEHOLDER,
         ("isabelle",),
         r"\b(sorry|oops)\b",
-        "proof contains `sorry`/`oops`, which abandons the goal",
+        "%s contains `sorry`/`oops`, which abandons the goal",
         requires=("sorry", "oops"),
         example="lemma t: True sorry",
     ),
@@ -185,7 +205,7 @@ PATTERNS: tuple[HackPattern, ...] = (
         HackClass.PLACEHOLDER,
         ("axle",),
         r"\b(sorry|admit|TODO|FIXME|__PLACEHOLDER__)\b",
-        "proof contains a placeholder token",
+        "%s contains a placeholder token",
         requires=("sorry", "admit", "todo", "fixme", "__placeholder__"),
         example="proof: TODO",
     ),
@@ -195,7 +215,7 @@ PATTERNS: tuple[HackPattern, ...] = (
         HackClass.NEW_AXIOM,
         _LEAN,
         r"^\s*(?:@\[[^\]]*\]\s*)?(?:private\s+|protected\s+|unsafe\s+)?axiom\b",
-        "proof declares a new `axiom`, which can simply assert the goal",
+        "%s declares a new `axiom`, which can simply assert the goal",
         multiline=True,
         requires=("axiom",),
         example="axiom cheat (n : Nat) : n = n",
@@ -205,7 +225,7 @@ PATTERNS: tuple[HackPattern, ...] = (
         HackClass.NEW_AXIOM,
         _LEAN,
         r"^\s*(?:@\[[^\]]*\]\s*)?constant\b",
-        "proof declares a `constant`, which introduces an unproven term",
+        "%s declares a `constant`, which introduces an unproven term",
         multiline=True,
         requires=("constant",),
         example="constant cheat : True",
@@ -215,7 +235,7 @@ PATTERNS: tuple[HackPattern, ...] = (
         HackClass.NEW_AXIOM,
         ("lean4",),
         r"^\s*(?:@\[[^\]]*\]\s*)?opaque\b",
-        "proof declares an `opaque` constant, whose value is assumed to exist",
+        "%s declares an `opaque` constant, whose value is assumed to exist",
         multiline=True,
         requires=("opaque",),
         example="opaque cheat : Nat",
@@ -225,7 +245,7 @@ PATTERNS: tuple[HackPattern, ...] = (
         HackClass.NEW_AXIOM,
         ("coq",),
         r"^\s*(?:Axiom|Parameter|Hypothesis|Variable|Conjecture)\b",
-        "proof declares an assumption instead of proving the goal",
+        "%s declares an assumption instead of proving the goal",
         multiline=True,
         requires=("axiom", "parameter", "hypothesis", "variable", "conjecture"),
         example="Axiom cheat : True.",
@@ -235,7 +255,7 @@ PATTERNS: tuple[HackPattern, ...] = (
         HackClass.NEW_AXIOM,
         ("isabelle",),
         r"^\s*(?:axiomatization|consts)\b",
-        "proof introduces an axiomatization instead of proving the goal",
+        "%s introduces an axiomatization instead of proving the goal",
         multiline=True,
         requires=("axiomatization", "consts"),
         example="axiomatization where cheat: True",
@@ -246,7 +266,7 @@ PATTERNS: tuple[HackPattern, ...] = (
         HackClass.KERNEL_BYPASS,
         ("lean4",),
         r"\bnative_decide\b",
-        "proof uses `native_decide`, which trusts the compiler instead of "
+        "%s uses `native_decide`, which trusts the compiler instead of "
         "the kernel (it adds the `Lean.ofReduceBool` axiom)",
         requires=("native_decide",),
         example="theorem t : 2 + 2 = 4 := by native_decide",
@@ -256,7 +276,7 @@ PATTERNS: tuple[HackPattern, ...] = (
         HackClass.KERNEL_BYPASS,
         ("lean4",),
         r"set_option\s+debug\.skipKernelTC\s+true\b",
-        "proof sets `debug.skipKernelTC`, turning off kernel typechecking",
+        "%s sets `debug.skipKernelTC`, turning off kernel typechecking",
         requires=("skipkerneltc",),
         example="set_option debug.skipKernelTC true",
     ),
@@ -265,7 +285,7 @@ PATTERNS: tuple[HackPattern, ...] = (
         HackClass.KERNEL_BYPASS,
         ("lean4",),
         r"@\[\s*(?:[^\]]*,\s*)?implemented_by\b",
-        "proof uses `@[implemented_by]`, which swaps in an unverified "
+        "%s uses `@[implemented_by]`, which swaps in an unverified "
         "implementation at runtime",
         requires=("implemented_by",),
         example="@[implemented_by fake] def f : Nat := 0",
@@ -275,7 +295,7 @@ PATTERNS: tuple[HackPattern, ...] = (
         HackClass.KERNEL_BYPASS,
         ("lean4",),
         r"@\[\s*(?:[^\]]*,\s*)?extern\b",
-        "proof uses `@[extern]`, delegating to unverified external code",
+        "%s uses `@[extern]`, delegating to unverified external code",
         requires=("extern",),
         example='@[extern "c_impl"] def f : Nat := 0',
     ),
@@ -284,7 +304,7 @@ PATTERNS: tuple[HackPattern, ...] = (
         HackClass.KERNEL_BYPASS,
         ("lean4",),
         r"^\s*unsafe\b",
-        "proof contains an `unsafe` declaration, which escapes the logic",
+        "%s contains an `unsafe` declaration, which escapes the logic",
         multiline=True,
         requires=("unsafe",),
         example="unsafe def f : Nat := 0",
@@ -294,7 +314,7 @@ PATTERNS: tuple[HackPattern, ...] = (
         HackClass.KERNEL_BYPASS,
         ("lean4",),
         r"^\s*partial\s+(?:unsafe\s+)?def\b",
-        "proof declares a `partial def`, whose termination is not checked",
+        "%s declares a `partial def`, whose termination is not checked",
         multiline=True,
         requires=("partial",),
         example="partial def loop (n : Nat) : Nat := loop n",
@@ -304,7 +324,7 @@ PATTERNS: tuple[HackPattern, ...] = (
         HackClass.KERNEL_BYPASS,
         ("lean4",),
         r"\b(Lean\.trustCompiler|Lean\.ofReduceBool|Lean\.ofReduceNat)\b",
-        "proof cites a compiler-trust axiom directly",
+        "%s cites a compiler-trust axiom directly",
         requires=("trustcompiler", "ofreducebool", "ofreducenat"),
         example="theorem t : True := Lean.ofReduceBool _ _ _",
     ),
@@ -313,7 +333,7 @@ PATTERNS: tuple[HackPattern, ...] = (
         HackClass.KERNEL_BYPASS,
         ("coq",),
         r"Unset\s+(Guard|Positivity|Universe)\s+Checking",
-        "proof disables a Coq kernel check",
+        "%s disables a Coq kernel check",
         requires=("unset",),
         example="Unset Guard Checking.",
     ),
@@ -323,7 +343,7 @@ PATTERNS: tuple[HackPattern, ...] = (
         HackClass.RESOURCE_UNCAP,
         ("lean4",),
         r"set_option\s+maxHeartbeats\s+0\b",
-        "proof removes the heartbeat limit entirely, so a non-terminating "
+        "%s removes the heartbeat limit entirely, so a non-terminating "
         "search is indistinguishable from a proof",
         requires=("maxheartbeats",),
         example="set_option maxHeartbeats 0",
@@ -333,7 +353,7 @@ PATTERNS: tuple[HackPattern, ...] = (
         HackClass.ELABORATION_TRICK,
         ("lean4",),
         r"set_option\s+checkBinderAnnotations\s+false\b",
-        "proof disables binder-annotation checking",
+        "%s disables binder-annotation checking",
         requires=("checkbinderannotations",),
         example="set_option checkBinderAnnotations false",
     ),
@@ -342,7 +362,7 @@ PATTERNS: tuple[HackPattern, ...] = (
         HackClass.ELABORATION_TRICK,
         ("lean4",),
         r"set_option\s+(?:relaxedAutoImplicit|autoImplicit)\s+true\b",
-        "proof enables `autoImplicit`, which silently turns an unbound name "
+        "%s enables `autoImplicit`, which silently turns an unbound name "
         "into a universally quantified variable and can weaken the statement",
         requires=("autoimplicit",),
         example="set_option autoImplicit true",
@@ -352,7 +372,7 @@ PATTERNS: tuple[HackPattern, ...] = (
         HackClass.ELABORATION_TRICK,
         ("lean4",),
         r"set_option\s+(?:structureEta|backward\.\w+)\s+(?:false|true)\b",
-        "proof changes a low-level elaborator setting that can alter what "
+        "%s changes a low-level elaborator setting that can alter what "
         "the statement means",
         requires=("structureeta", "backward."),
         example="set_option structureEta false",
@@ -363,7 +383,7 @@ PATTERNS: tuple[HackPattern, ...] = (
         HackClass.KERNEL_BYPASS,
         ("lean4",),
         r"^\s*#exit\b",
-        "proof contains `#exit`, which makes Lean stop processing the rest of "
+        "%s contains `#exit`, which makes Lean stop processing the rest of "
         "the file -- anything after it is never checked at all",
         multiline=True,
         requires=("#exit",),
@@ -374,7 +394,7 @@ PATTERNS: tuple[HackPattern, ...] = (
         HackClass.PLACEHOLDER,
         ("lean4",),
         r"^\s*proof_wanted\b",
-        "proof uses Mathlib's `proof_wanted`, which records a statement "
+        "%s uses Mathlib's `proof_wanted`, which records a statement "
         "without proving it",
         multiline=True,
         requires=("proof_wanted",),
@@ -386,7 +406,7 @@ PATTERNS: tuple[HackPattern, ...] = (
         HackClass.STATEMENT_TAMPERING,
         ("lean4",),
         r"^\s*variable[s]?\s*[({\[⦃]",
-        "proof declares section `variable`s, which Lean silently adds to the "
+        "%s declares section `variable`s, which Lean silently adds to the "
         "theorem as extra hypotheses -- `variable (h : False)` weakens the "
         "statement to nothing while compiling cleanly",
         multiline=True,
@@ -399,7 +419,7 @@ PATTERNS: tuple[HackPattern, ...] = (
         HackClass.KERNEL_BYPASS,
         ("lean4",),
         r"^\s*(?:@\[[^\]]*\]\s*)?(?:local\s+|scoped\s+)?(?:elab|elab_rules|run_cmd|run_elab|initialize)\b",
-        "proof runs compile-time metaprogramming, which can add declarations "
+        "%s runs compile-time metaprogramming, which can add declarations "
         "or axioms programmatically, out of reach of any text-level check",
         multiline=True,
         requires=("elab", "run_cmd", "run_elab", "initialize"),
@@ -530,8 +550,18 @@ def screen_source(
     required_statement: str | None = None,
     check_shadowing: bool = True,
     allowed_imports: Sequence[str] | None = DEFAULT_ALLOWED_IMPORTS,
+    classes: Sequence[HackClass] = PROOF_HACK_CLASSES,
+    subject: str = "proof",
 ) -> SoundnessReport:
-    """Run every reward-hacking check against an assembled source.
+    """Screen source text for the ways it can game a checker.
+
+    ``classes`` restricts which kinds of hack are looked for, and
+    ``subject`` is the noun the messages use. Both APIs screen Lean text,
+    but not for the same things: a submitted proof is screened for
+    everything (``PROOF_HACK_CLASSES``, the default), while a problem
+    statement is screened for ``STATEMENT_HACK_CLASSES`` -- a problem
+    file's `sorry` is the hole, not a cheat, and its `variable` bindings
+    are ordinary Lean.
 
     ``required_statement`` enables the tampering and shadowing checks; pass
     ``None`` when the harness concatenated the statement itself and
@@ -541,6 +571,7 @@ def screen_source(
     ``None`` to skip the check when your setup legitimately imports local
     modules.
     """
+    wanted_classes = frozenset(classes)
     report = SoundnessReport()
     body = strip_comments(source, language)
     # Lowercased once and shared, so the literal prefilter in
@@ -550,10 +581,18 @@ def screen_source(
     lowered = body.lower()
 
     for pattern in PATTERNS:
+        if pattern.hack_class not in wanted_classes:
+            continue
         if language in pattern.languages and pattern.search(body, lowered):
-            report = report.with_violation(label(pattern.hack_class, pattern.id, pattern.message))
+            report = report.with_violation(
+                label(pattern.hack_class, pattern.id, pattern.message % subject)
+            )
 
-    if allowed_imports is not None and language == "lean4":
+    if (
+        allowed_imports is not None
+        and language == "lean4"
+        and HackClass.NEW_AXIOM in wanted_classes
+    ):
         for module in _IMPORT_RE.findall(body):
             root = module.split(".")[0]
             if root not in allowed_imports:
@@ -561,12 +600,16 @@ def screen_source(
                     label(
                         HackClass.NEW_AXIOM,
                         "lean.unknown_import",
-                        "proof imports `%s`, which is not a known library module -- a "
-                        "self-supplied module can carry its own axioms" % module,
+                        "%s imports `%s`, which is not a known library module -- a "
+                        "self-supplied module can carry its own axioms" % (subject, module),
                     )
                 )
 
-    homoglyph = _has_homoglyph_identifier(body)
+    homoglyph = (
+        _has_homoglyph_identifier(body)
+        if HackClass.HOMOGLYPH in wanted_classes
+        else ""
+    )
     if homoglyph:
         report = report.with_violation(
             label(
@@ -577,15 +620,15 @@ def screen_source(
             )
         )
 
-    if required_statement is not None:
+    if required_statement is not None and HackClass.STATEMENT_TAMPERING in wanted_classes:
         wanted = _normalize_statement(required_statement, language)
         if wanted and wanted not in _normalize_statement(source, language):
             report = report.with_violation(
                 label(
                     HackClass.STATEMENT_TAMPERING,
                     "generic.statement_altered",
-                    "submitted source does not contain the required statement "
-                    "verbatim, so it may prove something else",
+                    "%s does not contain the required statement "
+                    "verbatim, so it may prove something else" % subject,
                 )
             )
 
@@ -598,9 +641,9 @@ def screen_source(
                     label(
                         HackClass.DEFINITION_SHADOWING,
                         "lean.redefines_statement_term",
-                        "proof redefines %s, which the statement depends on -- the "
+                        "%s redefines %s, which the statement depends on -- the "
                         "statement may no longer mean what it says"
-                        % ", ".join(sorted(shadowed)[:4]),
+                        % (subject, ", ".join(sorted(shadowed)[:4])),
                     )
                 )
             if _SYNTAX_REDEF_RE.search(body):
@@ -608,8 +651,8 @@ def screen_source(
                     label(
                         HackClass.DEFINITION_SHADOWING,
                         "lean.notation_redefinition",
-                        "proof introduces new notation or macro rules, which can change "
-                        "what the statement means without editing its text",
+                        "%s introduces new notation or macro rules, which can change "
+                        "what the statement means without editing its text" % subject,
                     )
                 )
 
@@ -628,9 +671,9 @@ def screen_source(
                             label(
                                 HackClass.DEFINITION_SHADOWING,
                                 "lean.open_shadows_statement",
-                                "proof opens namespace `%s`, which shares a name with "
+                                "%s opens namespace `%s`, which shares a name with "
                                 "something the statement uses and can redirect it to a "
-                                "different definition" % namespace,
+                                "different definition" % (subject, namespace),
                             )
                         )
 

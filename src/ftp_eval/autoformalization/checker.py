@@ -23,7 +23,7 @@ import time
 from typing import Any, Sequence
 
 from .judge import Judge, JudgeError
-from ..shared.soundness import screen_source
+from ..shared.soundness import STATEMENT_HACK_CLASSES, screen_source
 from ..shared.types import ProbeKind, StatementTask, Status
 from .types import Check, CheckKind, JudgeLabel, StatementStatus, StatementVerdict
 from ..proving.verifier import Verifier
@@ -81,7 +81,19 @@ class StatementChecker:
                 )
 
         judge_verdict = None
-        if self.judge is not None:
+        if self.judge is not None and not task.informal_statement.strip():
+            # No prose means there is nothing to judge faithfulness against,
+            # so calling the judge would spend money to learn nothing. Over a
+            # 100-problem set with a paid judge that is 100 wasted calls.
+            checks.append(
+                Check(
+                    CheckKind.JUDGE_FAITHFUL,
+                    None,
+                    "the problem records no prose, so there is nothing to judge the "
+                    "formalization against",
+                )
+            )
+        elif self.judge is not None:
             try:
                 judge_verdict = self.judge.judge(task)
             except JudgeError as exc:
@@ -116,20 +128,27 @@ class StatementChecker:
     # -- individual checks --------------------------------------------
 
     def _check_no_placeholder(self, task: StatementTask) -> Check:
-        """The statement itself must not contain a hole or an axiom.
+        """The statement must not assume what it asks for.
 
-        A formalization carrying ``sorry`` or declaring an axiom is broken
-        before any proof is attempted, and running the prover on it would
-        report a confusing compile error instead of the real problem.
+        An `axiom`, an `opaque` constant or an elaborator setting that
+        weakens the goal makes a formalization wrong before any proof is
+        attempted. Deliberately *not* checked: a `sorry` in the problem's
+        own body, which is the hole a participant fills, and `variable`
+        bindings, which are ordinary Lean. Those are screened on the answer
+        side instead -- see `STATEMENT_HACK_CLASSES`.
         """
         report = screen_source(
             task.formal_statement,
             task.language,
             required_statement=None,
             allowed_imports=None,
+            classes=STATEMENT_HACK_CLASSES,
+            subject="statement",
         )
         if report.ok:
-            return Check(CheckKind.NO_PLACEHOLDER, True, "statement is free of holes and axioms")
+            return Check(
+                CheckKind.NO_PLACEHOLDER, True, "statement assumes nothing it should prove"
+            )
         return Check(
             CheckKind.NO_PLACEHOLDER,
             False,

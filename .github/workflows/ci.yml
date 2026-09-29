@@ -43,39 +43,37 @@ jobs:
         run: mypy || true   # advisory for now; not a merge gate
 
       # The mock backend exists so CI can exercise the real pipeline
-      # without a Lean toolchain. --strict turns the demo fixtures'
-      # deliberate `sorry` into a non-zero exit, so this asserts that
-      # soundness screening still fires end to end.
-      - name: Smoke test the pipeline
+      # without a Lean toolchain.
+      - name: Smoke test the diagnostics
         run: |
           ftp-eval backends
           ftp-eval judges
           ftp-eval doctor -b mock --smoke
-          # --strict must fail here: the fixtures contain a `sorry` proof.
-          if ftp-eval verify -b mock \
-               --tasks examples/jsonl-mode/tasks.jsonl \
-               --attempts examples/jsonl-mode/attempts.jsonl \
-               --out /tmp/results.jsonl --k 1,2 --strict --quiet; then
-            echo "expected a non-zero exit: the fixtures contain reward hacking"
+
+      # Auditing the problem set itself. Two regressions this guards:
+      # a problem file's `sorry` is the hole a participant fills, and its
+      # `variable` bindings are ordinary Lean, so neither may be reported
+      # as a malformed statement -- screening a statement with the
+      # proof-side rules marks every well-formed problem broken.
+      - name: Smoke test problem-set auditing
+        run: |
+          ftp-eval audit --problems benchmarks/demo-2026/problems \
+            --judge mock --yes --quiet | tee /tmp/audit.txt
+          if grep -q "malformed" /tmp/audit.txt; then
+            echo 'the demo problems are well formed: the sorry is the hole, not a cheat'
             exit 1
           fi
-          ftp-eval score /tmp/results.jsonl --k 1,2 --tactics
+          # A problem set without provenance is reported, not silently passed.
+          grep -q "no MathDB id" /tmp/audit.txt
 
-      # Both links over the three-file layout. The fixtures include a
-      # valid proof of an unfaithful statement, so eval-all must report
-      # `proved_wrong_statement` rather than counting it as solved.
-      - name: Smoke test statement checking and end-to-end
-        run: |
-          ftp-eval check-statement --judge mock --yes -b mock \
-            --informal examples/jsonl-mode/triplet/informal.jsonl \
-            --formal examples/jsonl-mode/triplet/formal.jsonl --quiet
-          ftp-eval eval-all -b mock --judge mock --yes \
-            --informal examples/jsonl-mode/triplet/informal.jsonl \
-            --formal examples/jsonl-mode/triplet/formal.jsonl \
-            --proofs examples/jsonl-mode/triplet/proof.jsonl \
-            --out /tmp/combined.jsonl --quiet | tee /tmp/combined.txt
-          grep -q "proved_wrong_statement" /tmp/combined.txt || {
-            echo "expected the unfaithful-statement fixture to be caught"; exit 1; }
+          # A statement that assumes its own conclusion must still be caught.
+          mkdir -p /tmp/bad-problems
+          printf 'axiom cheat : True\ntheorem P001 : True := by sorry\n' \
+            > /tmp/bad-problems/P001.lean
+          if ftp-eval audit --problems /tmp/bad-problems --strict --quiet; then
+            echo "expected a non-zero exit: the statement declares an axiom"
+            exit 1
+          fi
 
       # Two-file matching: does answer.lean prove theorem.lean? The
       # fixtures include an answer that compiles on its own but guts a

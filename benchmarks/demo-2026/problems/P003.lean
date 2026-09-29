@@ -10,6 +10,14 @@ public import FormalConjecturesUtil
 - difficulty: textbook
 - author: jz
 - checked: 2026-09-21
+
+## Provenance
+- mathdb_id: demo.003
+- source: demo-2026
+- source_locator: problems/P003.lean
+- difficulty: unrated
+- author: demo
+- prose: Show that there are infinitely many prime numbers.
 -/
 
 namespace P003

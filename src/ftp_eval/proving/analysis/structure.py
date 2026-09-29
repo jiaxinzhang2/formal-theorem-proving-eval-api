@@ -26,7 +26,7 @@ from dataclasses import dataclass, field
 from typing import Any, Iterable, Mapping, Sequence
 
 from ...shared.comments import strip_comments
-from ...shared.stats import Distribution, distribution
+from .stats import Distribution, distribution
 from .tactics import extract_tactics
 
 __all__ = [

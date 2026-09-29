@@ -140,8 +140,27 @@ def test_missing_listing_returns_none_not_empty():
 # -- statement checks --------------------------------------------------
 
 
-def test_statement_with_sorry_is_malformed():
+def test_the_problems_own_hole_is_not_a_malformation():
+    # A problem file's `sorry` is the hole the participant fills. Flagging
+    # it would mark every problem in a benchmark as broken.
     verdict = StatementChecker().check(task(formal="theorem t : True := by sorry"))
+    assert verdict.status is not StatementStatus.MALFORMED
+    assert any(c.kind is CheckKind.NO_PLACEHOLDER and c.passed for c in verdict.checks)
+
+
+def test_variable_bindings_are_not_a_malformation():
+    # `variable` is ordinary Lean in a problem file. On the answer side it
+    # is screened as statement tampering; here it must not fire.
+    verdict = StatementChecker().check(
+        task(formal="variable (n : Nat)\ntheorem t : n + 0 = n := by sorry")
+    )
+    assert verdict.status is not StatementStatus.MALFORMED
+
+
+def test_statement_weakened_by_an_elaborator_setting_is_malformed():
+    verdict = StatementChecker().check(
+        task(formal="set_option autoImplicit true\ntheorem t : P := by sorry")
+    )
     assert verdict.status is StatementStatus.MALFORMED
     assert any(c.kind is CheckKind.NO_PLACEHOLDER and c.passed is False for c in verdict.checks)
 
@@ -382,12 +401,27 @@ def _proof(status):
 
 
 def test_structural_checks_still_run_without_prose():
+    # No prose means faithfulness cannot be judged, but a statement that
+    # assumes its own conclusion is still caught.
     task = StatementTask(
-        task_id="t", informal_statement="", formal_statement="theorem t : True := by sorry"
+        task_id="t", informal_statement="", formal_statement="axiom t : True"
     )
     verdict = StatementChecker().check(task)
     assert verdict.status is StatementStatus.MALFORMED
     assert not verdict.checked_faithfulness
+
+
+def test_no_prose_means_the_judge_is_not_called():
+    # Judging faithfulness against nothing costs money and learns nothing.
+    # Over a 100-problem set with a paid judge that is 100 wasted calls.
+    judge = MockJudge()
+    verdict = StatementChecker(None, judge).check(
+        StatementTask(task_id="t", informal_statement="", formal_statement="theorem t : True := by")
+    )
+    assert not verdict.checked_faithfulness
+    assert verdict.judge is None
+    faithfulness = [c for c in verdict.checks if c.kind is CheckKind.JUDGE_FAITHFUL]
+    assert faithfulness and "records no prose" in faithfulness[0].detail
 
 
 def test_statement_summary_warns_about_unassessed_faithfulness():

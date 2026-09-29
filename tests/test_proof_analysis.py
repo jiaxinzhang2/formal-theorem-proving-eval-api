@@ -11,7 +11,7 @@ from ftp_eval.proving.analysis.structure import (
     sample_duplication,
 )
 from ftp_eval.proving.analysis.tactics import tactic_stats
-from ftp_eval.shared.stats import distribution
+from ftp_eval.proving.analysis.stats import distribution
 
 PROOF = """\
 by
@@ -387,7 +387,7 @@ def test_statement_complexity_travels_with_the_result():
 
 
 def test_point_biserial_detects_a_clean_relationship():
-    from ftp_eval.shared.stats import point_biserial
+    from ftp_eval.proving.analysis.stats import point_biserial
 
     values = [1, 2, 3, 10, 11, 12]
     outcomes = [True, True, True, False, False, False]
@@ -397,7 +397,7 @@ def test_point_biserial_detects_a_clean_relationship():
 
 
 def test_point_biserial_is_none_when_undefined():
-    from ftp_eval.shared.stats import point_biserial
+    from ftp_eval.proving.analysis.stats import point_biserial
 
     assert point_biserial([1, 2], [True, False]) is None          # too few points
     assert point_biserial([5, 5, 5], [True, False, True]) is None  # no variation
@@ -405,14 +405,14 @@ def test_point_biserial_is_none_when_undefined():
 
 
 def test_point_biserial_rejects_mismatched_lengths():
-    from ftp_eval.shared.stats import point_biserial
+    from ftp_eval.proving.analysis.stats import point_biserial
 
     with pytest.raises(ValueError):
         point_biserial([1, 2, 3], [True, False])
 
 
 def test_correlations_are_ranked_by_magnitude():
-    from ftp_eval.shared.stats import correlate_with_success
+    from ftp_eval.proving.analysis.stats import correlate_with_success
 
     entries = []
     for i in range(20):
@@ -429,7 +429,7 @@ def test_correlations_are_ranked_by_magnitude():
 
 
 def test_correlation_report_states_the_causation_caveat():
-    from ftp_eval.shared.stats import correlate_with_success, format_correlations
+    from ftp_eval.proving.analysis.stats import correlate_with_success, format_correlations
 
     entries = [({"lines": 2 if i < 6 else 40}, i < 6) for i in range(12)]
     text = format_correlations(correlate_with_success(entries, fields=("lines", "cited_lemmas")))
@@ -438,7 +438,7 @@ def test_correlation_report_states_the_causation_caveat():
 
 
 def test_empty_correlations_say_so():
-    from ftp_eval.shared.stats import format_correlations
+    from ftp_eval.proving.analysis.stats import format_correlations
 
     assert "none above" in format_correlations([])
 

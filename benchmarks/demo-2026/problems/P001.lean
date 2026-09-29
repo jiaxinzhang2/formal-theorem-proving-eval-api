@@ -9,6 +9,14 @@ public import FormalConjecturesUtil
 
 /-!
 # Least N for a 3-element sum-distinct set
+
+## Provenance
+- mathdb_id: demo.001
+- source: demo-2026
+- source_locator: problems/P001.lean
+- difficulty: unrated
+- author: demo
+- prose: Find the least N such that there exists a three-element subset A of {1, ..., N} all of whose subset sums are distinct.
 -/
 
 namespace Demo
