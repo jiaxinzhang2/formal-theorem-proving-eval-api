@@ -115,7 +115,7 @@ vanishing from the denominator.
 ## Adding a check
 
 Syntactic patterns go in the tables at the top of
-`src/ftp_eval/verifier.py`, keyed by language. Anything that needs to ask
+`src/ftp_eval/soundness.py`, keyed by language. Anything that needs to ask
 the prover goes in that backend's `extra_soundness_checks`.
 
 Every check needs a test in `tests/test_soundness.py` covering both

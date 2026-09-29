@@ -5,6 +5,11 @@ scripts can all say ``--backend lean4`` without importing anything
 prover-specific. Third-party backends can register themselves either by
 calling :func:`register` at import time or by publishing an entry point
 in the ``ftp_eval.backends`` group.
+
+That group name is deliberately short and does not track the internal
+module layout: it is a public contract that third-party packages write
+into their own metadata, so it should not move when this package is
+reorganized.
 """
 
 from __future__ import annotations
@@ -12,7 +17,7 @@ from __future__ import annotations
 import importlib
 from typing import Any, Callable, Iterator
 
-from .verifier import Verifier
+from .proving.verifier import Verifier
 
 __all__ = [
     "register",
@@ -31,9 +36,9 @@ _REGISTRY: dict[str, Callable[..., Verifier]] = {}
 #: Backends shipped with this package, imported lazily so that a missing
 #: optional dependency in one of them cannot break the others.
 _BUILTINS: dict[str, tuple[str, str]] = {
-    "mock": ("ftp_eval.backends.mock", "MockVerifier"),
-    "lean4": ("ftp_eval.backends.lean4", "Lean4Verifier"),
-    "axle": ("ftp_eval.backends.axle", "AxleVerifier"),
+    "mock": ("ftp_eval.proving.backends.mock", "MockVerifier"),
+    "lean4": ("ftp_eval.proving.backends.lean4", "Lean4Verifier"),
+    "axle": ("ftp_eval.proving.backends.axle", "AxleVerifier"),
 }
 
 _entry_points_loaded = False
@@ -119,8 +124,8 @@ def available() -> Iterator[str]:
 _JUDGES: dict[str, Callable[..., Any]] = {}
 
 _BUILTIN_JUDGES: dict[str, tuple[str, str]] = {
-    "mock": ("ftp_eval.judge", "MockJudge"),
-    "claude": ("ftp_eval.judges.claude", "ClaudeJudge"),
+    "mock": ("ftp_eval.formalizing.judge", "MockJudge"),
+    "claude": ("ftp_eval.formalizing.judges.claude", "ClaudeJudge"),
 }
 
 
@@ -134,7 +139,7 @@ def create_judge(name: str, *, consensus: int = 1, recheck: int = 2, **config: A
     """Instantiate a judge, optionally wrapped in consensus voting.
 
     ``consensus > 1`` wraps it in
-    :class:`~ftp_eval.judge.ConsensusJudge`, which votes across samples
+    :class:`~ftp_eval.formalizing.judge.ConsensusJudge`, which votes across samples
     and re-examines its own rejections before letting one stand.
     """
     if name in _JUDGES:
@@ -152,7 +157,7 @@ def create_judge(name: str, *, consensus: int = 1, recheck: int = 2, **config: A
 
     judge = factory(**config)
     if consensus > 1:
-        from .judge import ConsensusJudge
+        from .formalizing.judge import ConsensusJudge
 
         return ConsensusJudge(judge, samples=consensus, recheck_rejections=recheck)
     return judge

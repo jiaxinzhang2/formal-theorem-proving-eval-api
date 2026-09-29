@@ -89,6 +89,43 @@ Vacuous hypotheses are handled on the *statement* side (`ProbeKind.VACUOUS`),
 because there the proof is genuinely valid and only the statement is at
 fault.
 
+## Layout
+
+The package is organized along the two links, so the structure shows the
+architecture rather than hiding it:
+
+```
+ftp_eval/
+├── formalizing/     ① is the formalization faithful to the problem?
+│   ├── checker.py       structural probes + an LLM judge, kept distinct
+│   ├── judge.py         the judge interface, a mock, consensus voting
+│   └── judges/          provider-backed judges (claude)
+├── proving/         ② does the proof close the goal?
+│   ├── verifier.py      the interface every backend implements
+│   ├── runner.py        batch execution: streaming, resume, caching
+│   └── backends/        mock, lean4, axle
+├── analysis/        what happened, for passes and failures alike
+│   ├── tactics.py       which tactics, in what order
+│   ├── structure.py     proof shape, statement complexity, correlations
+│   ├── modes.py         failure modes with attribution; success modes
+│   └── scoring.py       unbiased pass@k and the Summary
+├── pipeline.py      both links together, with a combined verdict
+│
+├── types.py         the vocabulary every layer speaks   ─┐
+├── soundness.py     reward-hacking detection             │ shared by
+├── source.py        comment stripping, tokenization      │ all three
+├── dataset.py       JSONL I/O, the three-file layout     │ layers
+├── registry.py      backend and judge lookup by name    ─┘
+└── cli.py
+```
+
+The whole public API is importable straight from `ftp_eval` — these paths
+matter only when extending the package. Two names are deliberately
+independent of the layout: the `ftp_eval.backends` entry-point group (a
+plugin contract third parties write into their own metadata, so it must
+not move when this package is reorganized) and every symbol in
+`__all__`.
+
 ## Install
 
 ```bash

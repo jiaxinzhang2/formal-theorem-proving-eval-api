@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import pytest
 
-from ftp_eval.backends.lean4 import Lean4Verifier, classify_lean_message, parse_lean_log
+from ftp_eval.proving.backends.lean4 import Lean4Verifier, classify_lean_message, parse_lean_log
 from ftp_eval.types import ErrorKind, Severity
 
 

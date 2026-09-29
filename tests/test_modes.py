@@ -27,7 +27,7 @@ from ftp_eval import (
     looks_truncated,
     summarize,
 )
-from ftp_eval.modes import (
+from ftp_eval.analysis.modes import (
     aggregate_failure_modes,
     aggregate_success_modes,
     hallucinated_names,

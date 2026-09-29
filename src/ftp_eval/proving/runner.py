@@ -24,8 +24,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Iterable, Iterator, Sequence
 
-from .dataset import ResultWriter, already_done
-from .types import (
+from ..dataset import ResultWriter, already_done
+from ..types import (
     Diagnostic,
     ErrorKind,
     ProofAttempt,

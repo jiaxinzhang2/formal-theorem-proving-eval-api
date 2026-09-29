@@ -14,7 +14,7 @@ from ftp_eval import (
     create,
     load_results,
 )
-from ftp_eval.verifier import assemble_source
+from ftp_eval.proving.verifier import assemble_source
 
 
 def mk_task(task_id="t1", **kw):

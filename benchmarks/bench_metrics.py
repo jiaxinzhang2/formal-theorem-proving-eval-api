@@ -2,8 +2,8 @@
 """Benchmark the analysis layer. Committed so speed claims are checkable.
 
 The metrics in ``docs/metrics.md`` come from this script. Run it before and
-after touching :mod:`ftp_eval.proof_metrics`, :mod:`ftp_eval.soundness`,
-:mod:`ftp_eval.tactics` or :mod:`ftp_eval.modes`.
+after touching :mod:`ftp_eval.analysis.structure`, :mod:`ftp_eval.soundness`,
+:mod:`ftp_eval.analysis.tactics` or :mod:`ftp_eval.analysis.modes`.
 
     python benchmarks/bench_metrics.py            # human-readable table
     python benchmarks/bench_metrics.py --json     # machine-readable
@@ -37,7 +37,7 @@ from ftp_eval import (
     screen_source,
     summarize,
 )
-from ftp_eval.proof_metrics import sample_duplication
+from ftp_eval.analysis.structure import sample_duplication
 from ftp_eval.soundness import strip_comments
 
 #: name -> seconds. A breach means something got much slower, not slightly.

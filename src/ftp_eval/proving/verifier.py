@@ -13,11 +13,11 @@ import abc
 import time
 from typing import Any, Mapping, Sequence
 
-from .modes import classify_failure, classify_success
-from .proof_metrics import analyze_proof, analyze_statement
-from .soundness import PATTERNS, HackClass, screen_source, strip_comments
-from .tactics import extract_tactics
-from .types import (
+from ..analysis.modes import classify_failure, classify_success
+from ..analysis.structure import analyze_proof, analyze_statement
+from ..soundness import PATTERNS, HackClass, screen_source, strip_comments
+from ..analysis.tactics import extract_tactics
+from ..types import (
     Assembly,
     BackendInfo,
     Diagnostic,

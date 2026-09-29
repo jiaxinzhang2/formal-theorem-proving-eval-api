@@ -16,7 +16,7 @@ import hashlib
 import time
 from typing import Any
 
-from ..types import (
+from ...types import (
     BackendInfo,
     Diagnostic,
     ErrorKind,

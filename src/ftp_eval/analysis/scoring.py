@@ -27,7 +27,7 @@ from .modes import (
     aggregate_failure_modes,
     aggregate_success_modes,
 )
-from .proof_metrics import (
+from .structure import (
     Correlation,
     Distribution,
     SampleDuplication,
@@ -38,9 +38,9 @@ from .proof_metrics import (
     format_correlations,
     sample_duplication,
 )
-from .soundness import parse_label
+from ..soundness import parse_label
 from .tactics import TacticStats, tactic_stats
-from .types import ErrorKind, Status, VerificationResult
+from ..types import ErrorKind, Status, VerificationResult
 
 __all__ = ["pass_at_k", "estimate_pass_at_k", "TaskOutcome", "Summary", "summarize", "compare"]
 

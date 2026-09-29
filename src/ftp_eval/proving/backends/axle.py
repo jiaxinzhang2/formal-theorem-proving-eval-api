@@ -44,7 +44,7 @@ import urllib.error
 import urllib.request
 from typing import Any, Mapping, Sequence
 
-from ..types import (
+from ...types import (
     BackendInfo,
     Diagnostic,
     ErrorKind,

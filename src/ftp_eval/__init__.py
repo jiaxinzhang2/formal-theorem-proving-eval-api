@@ -1,8 +1,39 @@
 """ftp_eval -- a unified API for evaluating formal theorem-proving models.
 
-One interface, several provers. Write your evaluation against
-:class:`~ftp_eval.verifier.Verifier` and swap Lean 4 for a remote service
-without touching your scoring code.
+A formal-proving dataset has three artifacts, so there are two links to
+check, and the package is laid out along them::
+
+    natural language  ──①──▶  formal statement  ──②──▶  formal proof
+                      faithful?                 valid?
+
+    formalizing/   ① is the formalization faithful to the problem?
+      checker.py     structural probes + an LLM judge, kept distinct
+      judge.py       the judge interface, a mock, consensus voting
+      judges/        provider-backed judges
+
+    proving/       ② does the proof close the goal?
+      verifier.py    the interface every backend implements
+      runner.py      batch execution: streaming, resume, caching
+      backends/      mock, lean4, axle
+
+    analysis/      what happened, for passes and failures alike
+      tactics.py     which tactics, in what order
+      structure.py   proof shape, statement complexity, correlations
+      modes.py       failure modes with attribution; success modes
+      scoring.py     unbiased pass@k and the Summary
+
+    pipeline.py    both links together, with a combined verdict
+
+Shared by all three layers, which is why they sit at the top level:
+
+    types.py       the vocabulary every layer speaks
+    soundness.py   reward-hacking detection
+    source.py      comment stripping and tokenization
+    dataset.py     JSONL I/O and the three-file layout
+    registry.py    backend and judge lookup by name
+
+Everything in the public API is importable straight from ``ftp_eval``; the
+module paths above matter only when extending the package.
 
     from ftp_eval import ProofTask, ProofAttempt, create, EvalRunner
 
@@ -26,9 +57,9 @@ from .dataset import (
     read_jsonl,
     write_jsonl,
 )
-from .judge import ConsensusJudge, Judge, JudgeError, MockJudge
-from .metrics import Summary, estimate_pass_at_k, pass_at_k, summarize
-from .modes import (
+from .formalizing.judge import ConsensusJudge, Judge, JudgeError, MockJudge
+from .analysis.scoring import Summary, estimate_pass_at_k, pass_at_k, summarize
+from .analysis.modes import (
     Attribution,
     FailureMode,
     SuccessMode,
@@ -37,7 +68,7 @@ from .modes import (
     looks_truncated,
 )
 from .pipeline import EndToEndResult, EndToEndRunner, EndToEndStatus
-from .proof_metrics import (
+from .analysis.structure import (
     Correlation,
     ProofStructure,
     StatementComplexity,
@@ -53,10 +84,10 @@ from .registry import (
     register,
     register_judge,
 )
-from .runner import EvalRunner, ProgressEvent, ResultCache, RunConfig
+from .proving.runner import EvalRunner, ProgressEvent, ResultCache, RunConfig
 from .soundness import HackClass, audit_axioms, screen_source
-from .statement import StatementChecker
-from .tactics import extract_tactics
+from .formalizing.checker import StatementChecker
+from .analysis.tactics import extract_tactics
 from .types import (
     Assembly,
     BackendInfo,
@@ -78,7 +109,7 @@ from .types import (
     Status,
     VerificationResult,
 )
-from .verifier import (
+from .proving.verifier import (
     BackendUnavailable,
     RawVerdict,
     Verifier,

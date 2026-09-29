@@ -20,7 +20,7 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Iterator, Sequence
 
-from .statement import StatementChecker
+from .formalizing.checker import StatementChecker
 from .types import (
     ProofAttempt,
     StatementStatus,
@@ -29,7 +29,7 @@ from .types import (
     Status,
     VerificationResult,
 )
-from .verifier import Verifier
+from .proving.verifier import Verifier
 
 __all__ = ["EndToEndStatus", "EndToEndResult", "EndToEndRunner"]
 

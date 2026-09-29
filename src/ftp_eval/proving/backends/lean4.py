@@ -23,7 +23,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable
 
-from ..types import (
+from ...types import (
     BackendInfo,
     Diagnostic,
     ErrorKind,
@@ -35,7 +35,7 @@ from ..types import (
     StatementTask,
     Status,
 )
-from ..soundness import audit_axioms
+from ...soundness import audit_axioms
 from ..verifier import BackendUnavailable, RawVerdict, Verifier, VerifierError
 
 __all__ = [

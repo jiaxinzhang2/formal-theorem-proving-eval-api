@@ -21,9 +21,9 @@ from ftp_eval import (
     create_judge,
     load_triplets,
 )
-from ftp_eval.backends.lean4 import Lean4Verifier, parse_lean_theorem, parse_printed_axioms
+from ftp_eval.proving.backends.lean4 import Lean4Verifier, parse_lean_theorem, parse_printed_axioms
 from ftp_eval.pipeline import EndToEndRunner, EndToEndStatus, combine
-from ftp_eval.statement import format_statement_summary
+from ftp_eval.formalizing.checker import format_statement_summary
 
 
 def task(formal="theorem t (n : Nat) (h : 0 < n) : n ^ 2 >= n := by", **kw) -> StatementTask:
@@ -284,7 +284,7 @@ def test_claude_judge_reports_unavailable_without_credentials(monkeypatch):
 
 
 def test_claude_judge_cost_estimate_uses_the_price_table():
-    from ftp_eval.judges.claude import estimate_cost_usd
+    from ftp_eval.formalizing.judges.claude import estimate_cost_usd
 
     cost = estimate_cost_usd("claude-opus-5", {"input_tokens": 1_000_000, "output_tokens": 0})
     assert cost == pytest.approx(5.00)
@@ -299,7 +299,7 @@ def test_claude_judge_never_turns_an_api_failure_into_a_rejection():
             def create(**kwargs):
                 raise RuntimeError("503")
 
-    from ftp_eval.judges.claude import ClaudeJudge
+    from ftp_eval.formalizing.judges.claude import ClaudeJudge
 
     with pytest.raises(JudgeError):
         ClaudeJudge(client=Boom(), api_key="x").judge(task())
@@ -329,7 +329,7 @@ def test_claude_judge_parses_a_structured_verdict():
             def create(**kwargs):
                 return Response()
 
-    from ftp_eval.judges.claude import ClaudeJudge
+    from ftp_eval.formalizing.judges.claude import ClaudeJudge
 
     verdict = ClaudeJudge(client=Client(), api_key="x").judge(task())
     assert verdict.label is JudgeLabel.UNFAITHFUL
@@ -356,7 +356,7 @@ def test_claude_judge_rejects_an_unparseable_response():
             def create(**kwargs):
                 return Response()
 
-    from ftp_eval.judges.claude import ClaudeJudge
+    from ftp_eval.formalizing.judges.claude import ClaudeJudge
 
     with pytest.raises(JudgeError, match="non-JSON"):
         ClaudeJudge(client=Client(), api_key="x").judge(task())

@@ -34,12 +34,13 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Iterable, Sequence
 
+from .source import strip_comments
 from .types import SoundnessReport
 
 __all__ = [
     "HackClass",
     "HackPattern",
-    "strip_comments",
+    "strip_comments",  # re-exported: callers of the screen usually want both
     "screen_source",
     "declared_names",
     "statement_identifiers",
@@ -446,14 +447,6 @@ _COMMON_IDENTIFIERS = frozenset(
     }
 )
 
-_COMMENT_STRIPPERS: dict[str, tuple[tuple[str, str], ...]] = {
-    "lean4": ((r"/-(?:.|\n)*?-/", " "), (r"--[^\n]*", " ")),
-    "lean3": ((r"/-(?:.|\n)*?-/", " "), (r"--[^\n]*", " ")),
-    "coq": ((r"\(\*(?:.|\n)*?\*\)", " "),),
-    "isabelle": ((r"\(\*(?:.|\n)*?\*\)", " "),),
-}
-
-
 def label(hack_class: HackClass, pattern_id: str, message: str) -> str:
     """Format a violation as ``[class:pattern_id] message``.
 
@@ -474,19 +467,6 @@ def parse_label(violation: str) -> tuple[str | None, str | None]:
 
 
 _LABEL_RE = re.compile(r"^\[([a-z_]+):([a-zA-Z0-9_.]+)\]")
-
-
-def strip_comments(text: str, language: str) -> str:
-    """Remove comments so checks cannot be commented past.
-
-    Needed in both directions: ``-- remember to remove the sorry`` must
-    not fail an honest proof, and a ``sorry`` hidden inside ``/- ... -/``
-    must not pass a dishonest one.
-    """
-    out = text
-    for pattern, repl in _COMMENT_STRIPPERS.get(language, ()):
-        out = re.sub(pattern, repl, out)
-    return out
 
 
 def declared_names(source: str, language: str) -> set[str]:

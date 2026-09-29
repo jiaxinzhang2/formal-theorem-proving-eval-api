@@ -5,7 +5,7 @@ the shared vocabulary of `ftp_eval.types`. Everything else (source
 assembly, soundness screening, timing, timeouts, error wrapping,
 caching, concurrency) is handled above you.
 
-Read `src/ftp_eval/backends/mock.py` first. It is the reference
+Read `src/ftp_eval/proving/backends/mock.py` first. It is the reference
 implementation and its actual logic is about thirty lines.
 
 ## The minimum
@@ -117,7 +117,7 @@ For a backend inside this package, add it to `_BUILTINS` in
 the others. For one in your own package, publish an entry point:
 
 ```toml
-[project.entry-points."ftp_eval.backends"]
+[project.entry-points."ftp_eval.proving.backends"]
 myprover = "my_package.backend:MyProver"
 ```
 

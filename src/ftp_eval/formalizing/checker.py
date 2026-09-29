@@ -23,8 +23,8 @@ import time
 from typing import Any, Sequence
 
 from .judge import Judge, JudgeError
-from .soundness import screen_source
-from .types import (
+from ..soundness import screen_source
+from ..types import (
     Check,
     CheckKind,
     JudgeLabel,
@@ -34,7 +34,7 @@ from .types import (
     StatementVerdict,
     Status,
 )
-from .verifier import Verifier
+from ..proving.verifier import Verifier
 
 __all__ = ["StatementChecker"]
 
