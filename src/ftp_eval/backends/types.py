@@ -24,7 +24,7 @@ from typing import Any, Iterable, Mapping
 # The only thing prover/ takes from source/: a verdict carries the
 # screening report for the source it was given. The arrow points this
 # way only -- source/ imports nothing from here.
-from ..source.soundness import SoundnessReport
+from .soundness import SoundnessReport
 
 __all__ = [
     # what a backend is asked

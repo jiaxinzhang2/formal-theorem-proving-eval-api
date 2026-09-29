@@ -7,7 +7,7 @@ measured -- this measures the cost of computing them. It lives in
 guarantees these budgets complement.
 
 Committed so the speed claims in the docs are checkable. Run it before and
-after touching :mod:`ftp_eval.proving.analysis.structure`, :mod:`ftp_eval.source.soundness`,
+after touching :mod:`ftp_eval.proving.analysis.structure`, :mod:`ftp_eval.backends.soundness`,
 :mod:`ftp_eval.proving.analysis.tactics` or :mod:`ftp_eval.proving.analysis.modes`.
 
     python tests/measure_speed.py            # human-readable table

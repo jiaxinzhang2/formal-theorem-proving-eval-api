@@ -1,4 +1,10 @@
-"""Statement checking and the judges behind it."""
+"""Faithfulness checking, and the judges behind it.
+
+This API asks one question -- does the formal statement mean what its prose
+says -- and only a judge can answer it. The checks that used to live here
+and asked about the Lean instead (elaborates, non_trivial, non_vacuous,
+gold_equivalent, assumes_nothing) are in ``test_problem_health.py``.
+"""
 
 from __future__ import annotations
 
@@ -139,72 +145,27 @@ def test_missing_listing_returns_none_not_empty():
 # -- statement checks --------------------------------------------------
 
 
-def test_the_problems_own_hole_is_not_a_malformation():
-    # A problem file's `sorry` is the hole the participant fills. Flagging
-    # it would mark every problem in a benchmark as broken.
-    verdict = StatementChecker().check(task(formal="theorem t : True := by sorry"))
-    assert verdict.status is not StatementStatus.MALFORMED
-    assert any(c.kind is CheckKind.NO_PLACEHOLDER and c.passed for c in verdict.checks)
-
-
-def test_variable_bindings_are_not_a_malformation():
-    # `variable` is ordinary Lean in a problem file. On the answer side it
-    # is screened as statement tampering; here it must not fire.
-    verdict = StatementChecker().check(
-        task(formal="variable (n : Nat)\ntheorem t : n + 0 = n := by sorry")
-    )
-    assert verdict.status is not StatementStatus.MALFORMED
-
-
-def test_statement_weakened_by_an_elaborator_setting_is_malformed():
-    verdict = StatementChecker().check(
-        task(formal="set_option autoImplicit true\ntheorem t : P := by sorry")
-    )
-    assert verdict.status is StatementStatus.MALFORMED
-    assert any(c.kind is CheckKind.NO_PLACEHOLDER and c.passed is False for c in verdict.checks)
-
-
-def test_statement_declaring_an_axiom_is_malformed():
-    verdict = StatementChecker().check(task(formal="axiom t : True"))
-    assert verdict.status is StatementStatus.MALFORMED
-
-
-def test_no_verifier_means_prover_checks_report_not_run():
-    verdict = StatementChecker().check(task())
-    by_kind = {c.kind: c for c in verdict.checks}
-    assert by_kind[CheckKind.ELABORATES].passed is None
-    assert "no verifier" in by_kind[CheckKind.ELABORATES].detail
-
-
 def test_no_judge_means_faithfulness_is_unassessed():
     verdict = StatementChecker().check(task())
     assert verdict.status is StatementStatus.INCONCLUSIVE
     assert not verdict.checked_faithfulness
 
 
-def test_structural_checks_alone_never_reach_ok():
-    # Passing the prover checks is not evidence the statement means the
-    # right thing, so the verdict stays INCONCLUSIVE without a judge.
-    checker = StatementChecker(create("mock"), None)
-    verdict = checker.check(task(formal="theorem t (h : 0 < 1) : True := by MOCK_FAIL"))
-    assert verdict.status is not StatementStatus.OK
-
-
 def test_judge_verdict_reaches_ok():
-    checker = StatementChecker(None, MockJudge())
+    checker = StatementChecker(MockJudge())
     verdict = checker.check(task(formal="theorem t (n : Nat) : n = n JUDGE_FAITHFUL := by"))
     assert verdict.status is StatementStatus.OK
     assert verdict.checked_faithfulness
 
 
-def test_judge_rejection_is_suspicious():
-    checker = StatementChecker(None, MockJudge())
+def test_judge_rejection_is_unfaithful():
+    checker = StatementChecker(MockJudge())
     verdict = checker.check(task(formal="theorem t : True JUDGE_UNFAITHFUL := by"))
-    assert verdict.status is StatementStatus.SUSPICIOUS
+    assert verdict.status is StatementStatus.UNFAITHFUL
 
 
 def test_judge_abstention_is_not_counted_as_a_failure():
-    checker = StatementChecker(None, MockJudge())
+    checker = StatementChecker(MockJudge())
     verdict = checker.check(task(formal="theorem t : True JUDGE_UNSURE := by"))
     assert verdict.status is StatementStatus.INCONCLUSIVE
     assert not verdict.failures
@@ -212,7 +173,7 @@ def test_judge_abstention_is_not_counted_as_a_failure():
 
 def test_judge_failure_does_not_become_a_rejection():
     # An outage must not turn into a wave of unfaithful verdicts.
-    checker = StatementChecker(None, MockJudge())
+    checker = StatementChecker(MockJudge())
     verdict = checker.check(task(formal="theorem t : True JUDGE_ERROR := by"))
     assert verdict.status is StatementStatus.INCONCLUSIVE
     assert not verdict.checked_faithfulness
@@ -221,7 +182,7 @@ def test_judge_failure_does_not_become_a_rejection():
 def test_statement_verdict_round_trips():
     from ftp_eval.autoformalization.types import StatementVerdict
 
-    verdict = StatementChecker(None, MockJudge()).check(
+    verdict = StatementChecker(MockJudge()).check(
         task(formal="theorem t : True JUDGE_FAITHFUL := by")
     )
     restored = StatementVerdict.from_dict(json.loads(json.dumps(verdict.to_dict())))
@@ -399,22 +360,11 @@ def _proof(status):
     return VerificationResult(task_id="t", attempt_id="t#0", backend="mock", status=status)
 
 
-def test_structural_checks_still_run_without_prose():
-    # No prose means faithfulness cannot be judged, but a statement that
-    # assumes its own conclusion is still caught.
-    task = StatementTask(
-        task_id="t", informal_statement="", formal_statement="axiom t : True"
-    )
-    verdict = StatementChecker().check(task)
-    assert verdict.status is StatementStatus.MALFORMED
-    assert not verdict.checked_faithfulness
-
-
 def test_no_prose_means_the_judge_is_not_called():
     # Judging faithfulness against nothing costs money and learns nothing.
     # Over a 100-problem set with a paid judge that is 100 wasted calls.
     judge = MockJudge()
-    verdict = StatementChecker(None, judge).check(
+    verdict = StatementChecker(judge).check(
         StatementTask(task_id="t", informal_statement="", formal_statement="theorem t : True := by")
     )
     assert not verdict.checked_faithfulness

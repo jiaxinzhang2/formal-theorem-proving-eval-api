@@ -220,14 +220,14 @@ ftp-eval audit --problems benchmarks/my-2026/problems \
 one.** Worth being blunt about, because it decides whether `audit` is
 useful to you:
 
-| check | who decides | can it say *yes*? |
+| check | who decides | which question |
 |---|---|---|
-assumes nothing it should prove | text only | no — refuse only |
-elaborates | the prover | no — refuse only |
-not closable by `trivial` | the prover | no — refuse only |
-no contradictory hypotheses | the prover | no — refuse only |
-**faithful to the prose** | **an LLM judge** | **yes** |
-iff-equivalent to a reference | the prover | yes, if you wrote a reference |
+assumes nothing it should prove | text only, no prover | fit to grade? |
+elaborates | the prover | fit to grade? |
+not closable by `trivial` | the prover | fit to grade? |
+no contradictory hypotheses | the prover | fit to grade? |
+iff-equivalent to a reference | the prover | fit to grade? |
+**faithful to the prose** | **an LLM judge** | **means the right thing?** |
 
 A statement can pass all four screens and still formalize a problem nobody
 asked about, so passing them yields `inconclusive`, never `ok`. This is the

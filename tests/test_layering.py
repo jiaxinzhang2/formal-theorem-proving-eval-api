@@ -1,12 +1,15 @@
 """The layering, enforced rather than described.
 
-The package is four layers, and every import must go strictly downward::
+Three layers, and every import must go strictly downward::
 
     spec/                the contracts
-    source/              reading formal source text
-    backends/            talking to a prover
+    backends/            talking to a prover, and screening what it is
+                         given: types, verifier, mock/lean4/axle, plus
+                         soundness screening and the comment scanner it
+                         needs
     proving/             API 1 -- does this answer prove this theorem?
-    autoformalization/   API 2 -- is this statement faithful?
+    autoformalization/   API 2 -- is this statement faithful? A judge and
+                         nothing else; it takes one dataclass from below
 
 This file exists because the rule was broken twice while nobody was
 checking. ``proving/verifier.py`` imported statement metrics from
@@ -15,7 +18,13 @@ Verifier from ``proving/`` -- so the "two separate APIs" were a circle. The
 second one also hid a bug: metrics computed in the backend layer were
 computed on the one code path grading does not use.
 
-A docstring cannot prevent that from happening again. A test can.
+There was a fourth layer, ``source/``, holding the comment scanner and the
+soundness screen. It was justified by both APIs needing it, and that stopped
+being true when the faithfulness check became pure judge -- so it folded
+into ``backends/``, where the verifier applies the screen a backend may not
+opt out of.
+
+A docstring cannot prevent any of that from happening again. A test can.
 """
 
 from __future__ import annotations
@@ -31,10 +40,9 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent / "src" / "ftp_eval"
 #: and from its own, never from an equal-or-higher one.
 LAYER = {
     "spec": 0,
-    "source": 1,
-    "backends": 2,
-    "proving": 3,
-    "autoformalization": 3,
+    "backends": 1,
+    "proving": 2,
+    "autoformalization": 2,
 }
 
 #: Indented too, because a function-local import evades the rule just as
@@ -101,14 +109,19 @@ def test_source_layer_imports_nothing_else_in_the_package():
     assert not reaching_out, "source/ reached upward:\n  " + "\n  ".join(reaching_out)
 
 
-def test_no_module_named_shared_came_back():
-    # `shared/` was a folder named for a relationship instead of for what
-    # it held, which is how two APIs ended up importing each other behind
-    # it. If it reappears, the layers above are the place to look first.
-    assert not (ROOT / "shared").exists(), (
-        "shared/ is back; put the module in the layer that describes it "
-        "(source/, backends/) or inside the one API that uses it"
-    )
+def test_no_catch_all_layer_came_back():
+    """`shared/` and `source/` were both folders defined by who used them.
+
+    That is how two APIs ended up importing each other behind one of them.
+    A module belongs in the layer that describes *what it is*, or inside
+    the single API that uses it -- never in a folder named for a
+    relationship, because the relationship changes and the folder does not.
+    """
+    for name in ("shared", "source", "common", "utils", "core"):
+        assert not (ROOT / name).is_dir(), (
+            "%s/ is back; put the module in backends/ if the prover layer "
+            "needs it, or inside the one API that uses it" % name
+        )
 
 
 @pytest.mark.parametrize("layer", sorted(LAYER))

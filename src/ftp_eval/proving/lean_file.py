@@ -18,7 +18,7 @@ import re
 from dataclasses import dataclass
 from typing import Any
 
-from .comments import strip_comments
+from ..backends.comments import strip_comments
 
 __all__ = [
     "LeanDeclaration",

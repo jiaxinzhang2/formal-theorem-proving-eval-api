@@ -39,25 +39,40 @@ valid proof gets counted as solved.
 ## Four layers, imports strictly downward
 
 ```
-                 ┌─────────────────────┬──────────────────────┐
-     the APIs    │  proving/           │  autoformalization/  │
-                 └──────────┬──────────┴──────────┬───────────┘
-                            ▼                     ▼
-     the prover      ┌──────────────────────────────────┐
-                     │  backends/                       │
-                     └───────────────┬──────────────────┘
-                                     ▼
-     the text        ┌──────────────────────────────────┐
-                     │  source/                         │
-                     └──────────────────────────────────┘
-     the contracts   ┌──────────────────────────────────┐
-                     │  spec/                           │
-                     └──────────────────────────────────┘
+   proving/                       autoformalization/
+   does this answer prove it?     is it faithful?
+        │                              │
+        │                              │   one dataclass, and that is all
+        └──────────────┬───────────────┘
+                       ▼
+                  backends/       talking to a prover, and screening what it
+                  types           is handed: the vocabulary, the Verifier
+                  verifier        interface, mock / lean4 / axle, the
+                  mock lean4      reward-hacking screen a backend may not
+                  axle            opt out of, and the comment scanner that
+                  soundness       screen needs
+                  comments
+                       │
+                       ▼
+                  spec/           the contracts (3 ABCs)
 ```
 
-Each arrow points down and there are no others. What made the two APIs
-depend on each other was that the layers below them did not exist yet, so
-each one reached into the other for machinery that belonged to neither.
+Every arrow points down and there are no others; `tests/test_layering.py`
+fails on any that does not.
+
+**`autoformalization/` is the thin one on purpose.** It is a judge and
+nothing else, so the only thing it takes from below is the `StatementTask`
+dataclass. It has no prover and no text analysis, because every question a
+prover or a regex can answer is a question about the Lean rather than about
+the problem — and those all live in `proving/grading/problem_health.py`.
+
+There used to be a fourth layer, `source/`, holding the comment scanner and
+the soundness screen. It was justified by both APIs needing it — and that
+stopped being true once faithfulness became pure judge, so it folded into
+`backends/`, where `verifier.py` applies that screen on every accepted proof
+anyway. A folder defined by *who uses it* rather than by *what it is* does
+not survive its callers changing. That was `shared/`'s problem too, and
+`tests/test_layering.py` now fails if either name reappears.
 
 ```
 src/ftp_eval/
@@ -75,17 +90,8 @@ src/ftp_eval/
 │   └── artifacts.py         what a results directory contains. RunDirectory
 │                            implements it.
 │
-├── source/                READING FORMAL SOURCE TEXT. Imports nothing else.
-│   ├── comments.py          what counts as a comment, per language.
-│   │                        Scanner based, so text in a string literal is
-│   │                        not mistaken for code.
-│   ├── lean_file.py         one Lean file -> declarations, with signatures,
-│   │                        bodies, attributes and answer holes
-│   └── soundness.py         screening source for what makes a verdict hollow.
-│                            Answers are screened for all 27 patterns,
-│                            problem statements for the 18 that apply to one.
-│
-├── backends/              TALKING TO A PROVER. Imports source/ only.
+├── backends/              TALKING TO A PROVER, and screening what it is
+│                          handed. Imports spec/ only.
 │   ├── types.py             what a prover is asked (ProofTask, StatementTask,
 │   │                        ProbeKind) and what it answers (Status,
 │   │                        VerificationResult, Diagnostic)
@@ -93,10 +99,19 @@ src/ftp_eval/
 │   │                        backend cannot opt out of
 │   ├── mock.py              a deterministic fake, so CI needs no Lean
 │   ├── lean4.py             `lake env lean` + the `#print axioms` audit
-│   └── axle.py              plumbing for an HTTP verification service
+│   ├── axle.py              plumbing for an HTTP verification service
+│   ├── soundness.py         screening source for what makes a verdict
+│   │                        hollow. Answers are screened for all 27
+│   │                        patterns, problem statements for the 18 that
+│   │                        apply to a statement
+│   └── comments.py          what counts as a comment, per language. Scanner
+│                            based, so text inside a string literal is not
+│                            mistaken for code
 │
 ├── proving/               API 1: does this answer prove this theorem?
 │   ├── matching.py          STAGE 1: is this the same theorem, actually proved?
+│   ├── lean_file.py         one Lean file -> declarations, with signatures,
+│   │                        bodies, attributes and answer holes
 │   ├── analysis/            what to measure about a proof
 │   │   ├── measure.py         fills a verdict's metrics in. The backend
 │   │   │                      reports what the prover said and nothing more.
@@ -111,6 +126,9 @@ src/ftp_eval/
 │       ├── compiling.py       driving the prover over a benchmark
 │       ├── statistics.py      over correct *and* incorrect answers
 │       ├── metadata.py        per-problem provenance; Lean/Mathlib versions
+│       ├── problem_health.py  is the problem set fit to grade? assumes_nothing
+│       │                    (text) + elaborates / non_trivial / non_vacuous /
+│       │                    gold_equivalent (the prover)
 │       ├── artifacts.py       writing the results directory
 │       └── contest.py         ProblemSet, Submission, grade_contest
 │
@@ -124,9 +142,14 @@ src/ftp_eval/
 Where a module goes, as a rule you can apply without asking anyone:
 
 * it **imports** the APIs → top level (`cli.py`, `registry.py`)
-* it is how you talk to a prover → `backends/`
-* it reads or measures source text, and imports nothing → `source/`
+* it is how you talk to a prover, or how you screen what you hand one →
+  `backends/`
 * only one API uses it → inside that API
+
+There is deliberately no folder for "things more than one place uses". Two
+have existed, `shared/` and `source/`, and both were named for who used
+them rather than for what they were — so both stopped describing their
+contents the moment the callers changed.
 
 `tests/test_layering.py` walks every import, including the indented ones,
 and fails on any that does not go downward. It exists because the rule was

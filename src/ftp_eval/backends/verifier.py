@@ -13,7 +13,7 @@ import abc
 import time
 from typing import Any, Mapping, Sequence
 
-from ..source.soundness import screen_source
+from .soundness import screen_source
 from .types import (
     Assembly,
     BackendInfo,

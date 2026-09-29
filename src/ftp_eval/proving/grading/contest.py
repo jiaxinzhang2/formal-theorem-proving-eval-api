@@ -40,7 +40,7 @@ from ...spec.benchmark import Benchmark, BenchmarkProblem
 from ...spec.stage import StageContext, StageId
 from .pipeline import run_stages
 from ...backends.types import Diagnostic, Severity, Status
-from ...source.lean_file import parse_lean_file
+from ..lean_file import parse_lean_file
 from ..analysis.measure import proof_metrics
 from ..analysis.modes import classify_failure, classify_success
 from .stages import GradedAnswer, Stage

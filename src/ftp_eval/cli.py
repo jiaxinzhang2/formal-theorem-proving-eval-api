@@ -35,6 +35,7 @@ from . import __version__
 from .autoformalization.checker import StatementChecker, format_statement_summary
 from .autoformalization.types import StatementStatus
 from .proving.grading import grade_contest, load_problem_set, load_submissions
+from .proving.grading.problem_health import check_problem_health, format_health_summary
 from .proving.matching import SubmissionMatcher
 from .registry import available, available_judges, create, create_judge
 from .io import write_jsonl
@@ -244,41 +245,62 @@ def cmd_audit(args: argparse.Namespace) -> int:
         verifier = create(args.backend, **_parse_options(args.option))
         if not verifier.info().available:
             # Unlike grading, an unavailable prover is not fatal here: the
-            # structural checks still say something useful alone, and the
-            # probes report NOT_RUN rather than passing silently.
+            # faithfulness check needs no prover at all, and the health
+            # probes report "not checked" rather than passing silently.
             print(
-                "note: backend %r is unavailable, so the prover-decidable checks "
-                "(elaborates, non-trivial, non-vacuous) will report as not run"
-                % args.backend,
+                "note: backend %r is unavailable, so the prover probes (elaborates, "
+                "non-trivial, non-vacuous) will report as not checked" % args.backend,
                 file=sys.stderr,
             )
+    elif not args.quiet:
+        print(
+            "note: no --backend, so nothing will be probed for vacuity. A vacuously "
+            "true problem is the worst kind to publish -- every answer to it is valid "
+            "and none proves anything -- and only a prover can find one.",
+            file=sys.stderr,
+        )
 
     judge = _open_judge(args)
     language = problem_set.manifest.language or "lean4"
-    checker = StatementChecker(verifier, judge, timeout_s=args.timeout)
+    # Two independent checks. Faithfulness is pure judge and needs no
+    # prover; the health probes need a prover and never look at the prose.
+    # Reported separately, because a setter needs both answers rather than
+    # an average of them.
+    checker = StatementChecker(judge, timeout_s=args.timeout)
 
     verdicts = []
+    health = []
     without_prose = []
     try:
         for index, problem_id in enumerate(problem_set.ids(), start=1):
             prose = problem_set.prose_for(problem_id)
             if not prose:
                 without_prose.append(problem_id)
-            verdict = checker.check(
-                StatementTask(
-                    task_id=problem_id,
-                    informal_statement=prose,
-                    formal_statement=problem_set.source_for(problem_id),
-                    language=language,
-                )
+            task = StatementTask(
+                task_id=problem_id,
+                informal_statement=prose,
+                formal_statement=problem_set.source_for(problem_id),
+                language=language,
             )
+            verdict = checker.check(task)
             verdicts.append(verdict)
+            report = check_problem_health(verifier, task, timeout_s=args.timeout)
+            health.append(report)
             if not args.quiet:
-                failures = verdict.failures
-                detail = "  <- %s" % failures[0].detail[:70] if failures else ""
+                failures = verdict.failures or report.failures
+                detail = "  <- %s" % failures[0].detail[:64] if failures else ""
                 print(
-                    "[%d/%d] %-13s %-16s%s"
-                    % (index, len(problem_set), verdict.status.value, problem_id[:16], detail),
+                    "[%d/%d] %-13s %-11s %-14s%s"
+                    % (
+                        index,
+                        len(problem_set),
+                        verdict.status.value,
+                        "UNGRADEABLE" if report.ungradeable else
+                        ("suspect" if report.suspect
+                         else ("gradeable" if report.probed else "not probed")),
+                        problem_id[:14],
+                        detail,
+                    ),
                     file=sys.stderr,
                     flush=True,
                 )
@@ -289,11 +311,19 @@ def cmd_audit(args: argparse.Namespace) -> int:
             judge.close()
 
     if args.out:
-        write_jsonl(args.out, verdicts)
+        write_jsonl(
+            args.out,
+            [
+                {"problem_id": v.task_id, "faithfulness": v.to_dict(), "health": h.to_dict()}
+                for v, h in zip(verdicts, health, strict=True)
+            ],
+        )
         print("wrote %d verdict(s) to %s" % (len(verdicts), args.out), file=sys.stderr)
 
     print()
     print(format_statement_summary(verdicts))
+    print()
+    print(format_health_summary(health))
 
     # Two gaps in the problem set itself, reported apart from the verdicts
     # because they are the setter's homework, not a checker result.
@@ -310,8 +340,12 @@ def cmd_audit(args: argparse.Namespace) -> int:
             % (len(unsourced), ", ".join(unsourced[:10]))
         )
 
-    if args.strict and any(
-        v.status in (StatementStatus.MALFORMED, StatementStatus.SUSPICIOUS) for v in verdicts
+    if args.strict and (
+        any(
+            v.status is StatementStatus.UNFAITHFUL
+            for v in verdicts
+        )
+        or any(h.ungradeable for h in health)
     ):
         return EXIT_UNSOUND
     return EXIT_OK
@@ -511,10 +545,15 @@ def build_parser() -> argparse.ArgumentParser:
     # -- autoformalization --------------------------------------------
     p_audit = sub.add_parser(
         "audit",
-        help="check the problem set itself: malformed, trivial or vacuous statements",
+        help="check the problem set itself: faithful to its prose (--judge), and "
+        "gradeable at all (--backend)",
     )
     p_audit.add_argument("--problems", required=True, help="directory of problem .lean files")
-    add_backend(p_audit, help="prover for the probes (elaborates, non-trivial, non-vacuous)")
+    add_backend(
+        p_audit,
+        help="prover for the health probes: elaborates, non-trivial, non-vacuous. "
+        "Omitted means vacuity is never checked, and only a prover can check it",
+    )
     p_audit.add_argument("--judge", help="faithfulness judge (mock, claude)")
     p_audit.add_argument(
         "--judge-option",

@@ -20,7 +20,7 @@ from ftp_eval import (
     create,
     screen_source,
 )
-from ftp_eval.source.soundness import (
+from ftp_eval.backends.soundness import (
     HackClass,
     LEGITIMATE_AXIOMS,
     audit_axioms,
@@ -294,7 +294,7 @@ def test_verifier_rejects_a_hacked_proof_the_backend_accepted():
 
 
 def test_every_pattern_has_a_unique_id():
-    from ftp_eval.source.soundness import PATTERNS
+    from ftp_eval.backends.soundness import PATTERNS
 
     ids = [p.id for p in PATTERNS]
     assert len(ids) == len(set(ids))

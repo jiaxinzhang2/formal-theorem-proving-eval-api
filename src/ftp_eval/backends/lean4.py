@@ -36,7 +36,7 @@ from .types import (
     Status,
 )
 
-from ..source.soundness import audit_axioms
+from .soundness import audit_axioms
 from .verifier import BackendUnavailable, RawVerdict, Verifier, VerifierError
 
 __all__ = [

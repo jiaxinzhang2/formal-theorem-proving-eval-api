@@ -17,18 +17,20 @@ autoformalization/  is this statement faithful to the prose?
 Neither imports the other. [`../../tests/test_layering.py`](../../tests/test_layering.py)
 enforces that, because the rule was broken twice while nobody was checking.
 
-## Four layers
+## Three layers
 
 ```
-proving/  autoformalization/     the two APIs
-        │                        ── imports go downward only ──
+proving/  autoformalization/     the two APIs. autoformalization is a judge
+        │            │           and nothing else -- one dataclass from
+        │            │           below, no prover, no text analysis.
+        ▼            ▼
+backends/                        talking to a prover, and screening what it
+                                 is handed: the vocabulary, the Verifier
+                                 interface, mock / lean4 / axle, the
+                                 reward-hacking screen a backend may not
+                                 opt out of, and the comment scanner it
+                                 needs.
         ▼
-backends/                        talking to a prover: the vocabulary, the
-                                 Verifier interface, mock / lean4 / axle
-        ▼
-source/                          reading formal source text: parsing Lean
-                                 files, comments, source screening.
-                                 Imports nothing else.
 spec/                            the contracts: 3 ABCs, each one subclassed
 ```
 
@@ -45,12 +47,14 @@ needed the prover interface, so the "two separate APIs" were a circle.
 | if it | put it in |
 |---|---|
 | imports the APIs | the top level |
-| is how you talk to a prover | `backends/` |
-| reads or measures source text, importing nothing | `source/` |
+| is how you talk to a prover, or how you screen what you hand one | `backends/` |
 | is used by only one API | inside that API |
 
-There is no `shared/`. A folder named for a relationship rather than for
-what it holds is where cross-API imports go to hide.
+There is no `shared/` and no `source/`. Both existed; both were named for
+*who used them* rather than for *what they held*, so both stopped
+describing their contents as soon as the callers changed — and one of them
+is where the two APIs' imports of each other went to hide.
+`tests/test_layering.py` fails if either name comes back.
 
 ## Two seams worth knowing about
 
@@ -60,7 +64,7 @@ so `proving/analysis/measure.py` fills a verdict's metrics in. This is not
 a style preference: while the metrics lived inside `verify()`, grading —
 which calls `probe()` — recorded pass/fail and nothing to analyse.
 
-**`source/soundness.py` is asked for different things by each caller.**
+**`backends/soundness.py` is asked for different things by each caller.**
 `screen_source` takes `classes` and `subject`: `PROOF_HACK_CLASSES` for a
 submitted answer, `STATEMENT_HACK_CLASSES` for a problem statement. Not
 cosmetic — a problem file's `sorry` is the hole a participant fills, so

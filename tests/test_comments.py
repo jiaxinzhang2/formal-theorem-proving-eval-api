@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import pytest
 
-from ftp_eval.source.comments import COMMENT_SYNTAX, strip_comments
+from ftp_eval.backends.comments import COMMENT_SYNTAX, strip_comments
 
 
 # -- both directions ---------------------------------------------------

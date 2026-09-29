@@ -50,7 +50,7 @@ __version__ = "0.1.0"
 from .autoformalization.checker import StatementChecker
 from .proving.analysis.statement_metrics import StatementComplexity, analyze_statement
 from .autoformalization.judge import ConsensusJudge, Judge, JudgeError, MockJudge
-from .source.comments import strip_comments
+from .backends.comments import strip_comments
 from .io import read_jsonl, write_jsonl
 from .proving.analysis.modes import (
     Attribution,
@@ -73,7 +73,7 @@ from .proving.grading import (
     load_problem_set,
     load_submissions,
 )
-from .source.lean_file import LeanDeclaration, LeanFile, parse_lean_file
+from .proving.lean_file import LeanDeclaration, LeanFile, parse_lean_file
 from .proving.matching import (
     MatchReport,
     MatchStatus,
@@ -97,7 +97,7 @@ from .registry import (
     register,
     register_judge,
 )
-from .source.soundness import HackClass, audit_axioms, screen_source
+from .backends.soundness import HackClass, audit_axioms, screen_source
 from .proving.analysis.stats import Correlation, correlate_with_success, distribution, point_biserial
 from .backends.types import (
     Assembly,

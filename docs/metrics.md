@@ -50,23 +50,54 @@ See [soundness.md](soundness.md) for the full check list. The short
 version: **passing the kernel is not the bar.** `sorry` compiles with a
 warning; `axiom cheat : <goal>` compiles with no complaint at all.
 
-## 3. Statement quality
+## 3. The problem set itself
 
-Only reachable if you supply the natural-language problem. These answer
-"is this the right theorem?", which no amount of proof checking can.
+Two different questions about a problem, asked by two different things, and
+reported separately because they have different fixes. Both come from
+`ftp-eval audit --problems P/`.
+
+### 3a. Is it fit to grade? — `proving/grading/problem_health.py`
 
 | check | decided by |
 |---|---|
-`no_placeholder` | Statement itself contains no `sorry`/axiom |
+`assumes_nothing` | **Text only**, so it runs with no prover: the problem declares no `axiom` / `opaque` / `constant`, and sets no elaborator option that weakens the goal |
 `elaborates` | Prover: statement + placeholder body typechecks |
 `non_trivial` | Prover: a cheap tactic does *not* close it |
 `non_vacuous` | Prover: `False` is *not* derivable from the hypotheses |
 `gold_equivalent` | Prover: `candidate ↔ reference` |
-`judge_faithful` | LLM judge: does it mean what the prose says |
 
-`checked_faithfulness` records whether meaning was actually assessed.
-Passing only the structural checks is not evidence of faithfulness, and
-the report says so rather than implying otherwise.
+`ungradeable` is set by a fatal failure — a statement that does not
+typecheck, or one that is vacuously true. Those are the two cases where no
+participant can be graded fairly, and vacuity is the worse of them: every
+answer to a vacuous problem is *genuinely valid* and none proves anything.
+
+Two flags, not one, because they mean different things:
+
+| | meaning |
+|---|---|
+`checked` | something ran. True even with no prover, since the text check always does |
+`probed` | a **prover** question was answered. False with no `--backend`, which is when vacuity was never looked for at all |
+
+A report with `checked` true and `probed` false is not a clean bill of
+health, and `format_health_summary` says so in as many words.
+
+### 3b. Does it mean the right thing? — `autoformalization/`
+
+| check | decided by |
+|---|---|
+`judge_faithful` | An LLM judge: does the Lean say what the prose says |
+
+One check, because that is the whole question, and **only a judge can
+answer it** — "does this Lean mean what that English means" is not
+something a prover can be asked. So this is the one place in the package
+where the affirmative answer comes from something that can be wrong, and
+it is why `judge.py` treats abstention as a real answer, re-checks
+rejections, and never turns an API outage into a rejection.
+
+`checked_faithfulness` records whether a judge returned anything at all.
+It is false for no judge, no `prose:` in the problem, an abstention, and
+an API failure — all four are "we do not know", and the status is
+`inconclusive`, never a pass.
 
 ## 4. Proof structure
 

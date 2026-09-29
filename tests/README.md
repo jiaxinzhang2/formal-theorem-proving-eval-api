@@ -1,6 +1,6 @@
 # Tests
 
-413 tests, no Lean required — everything runs on the `mock` backend.
+416 tests, no Lean required — everything runs on the `mock` backend.
 
 ```bash
 pytest -q                          # all of them
@@ -9,14 +9,15 @@ python tests/measure_speed.py  # the speed numbers, reproducible
 
 | file | what it pins down |
 |---|---|
-`test_layering.py` | **the four layers** — every import goes downward, the two APIs never reference each other, and `spec/`'s ABCs are actually implemented |
+`test_layering.py` | **the three layers** — every import goes downward, the two APIs never reference each other, and `spec/`'s ABCs are actually implemented |
 `test_matching.py` | stage ①: does `answer.lean` state `theorem.lean`? |
 `test_matching_adversarial.py` | **attacks** on stage ①. Every case is one that worked when first tried |
 `test_grading.py` | the three-stage pipeline, the results folder, and that metrics are recorded for refused answers too |
-`test_reward_hacking.py` | every check in `source/soundness.py`, both directions, and the statement/proof class split |
+`test_reward_hacking.py` | every check in `backends/soundness.py`, both directions, and the statement/proof class split |
 `test_soundness.py` | the screen at the verifier layer |
 `test_comments.py` | comment handling — exploitable when it is wrong |
-`test_statement_and_judge.py` | statement probes, judges, consensus voting |
+`test_statement_and_judge.py` | faithfulness: the judge, consensus voting, abstention |
+`test_problem_health.py` | is the problem set fit to grade? assumes_nothing + the prover probes |
 `test_lean4_parsing.py` | Lean log parsing and error classification |
 `test_modes.py` | failure modes with attribution; success modes |
 `test_proof_analysis.py` | tactics, structure, repetition, correlations |
@@ -28,8 +29,8 @@ python tests/measure_speed.py  # the speed numbers, reproducible
 
 **`test_layering.py`** is the only thing keeping the two APIs apart. It
 walks every import in the package, including the indented ones, and fails
-on any that does not go strictly downward through `spec/` → `source/` →
-`backends/` → the two APIs. It exists because the rule was broken twice
+on any that does not go strictly downward through `spec/` → `backends/` →
+the two APIs. It exists because the rule was broken twice
 while nobody was checking — and one of those breaks hid a bug, since the
 metrics computed in the backend layer were computed on the one code path
 grading does not use.

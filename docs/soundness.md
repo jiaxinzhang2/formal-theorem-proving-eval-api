@@ -132,7 +132,7 @@ rather than vanishing from the denominator.
 ## Adding a check
 
 Syntactic patterns go in the `PATTERNS` table in
-`src/ftp_eval/source/soundness.py`, keyed by language. Each entry carries
+`src/ftp_eval/backends/soundness.py`, keyed by language. Each entry carries
 `requires` (cheap literal triggers checked before the regex) and `example`
 (a snippet the pattern must catch, which makes the table self-testing), and
 a `HackClass` — which also decides whether it applies to statements as well

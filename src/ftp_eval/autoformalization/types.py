@@ -24,13 +24,19 @@ __all__ = [
 
 
 class CheckKind(str, Enum):
-    """One piece of evidence about whether a formalization is faithful."""
+    """What kind of evidence a :class:`Check` carries.
 
-    ELABORATES = "elaborates"
-    NO_PLACEHOLDER = "no_placeholder"
-    NON_TRIVIAL = "non_trivial"
-    NON_VACUOUS = "non_vacuous"
-    GOLD_EQUIVALENT = "gold_equivalent"
+    One kind, because this API asks one question. Everything that used to
+    be here -- elaborates, non_trivial, non_vacuous, gold_equivalent,
+    no_placeholder -- asked about the Lean rather than about the prose, and
+    lives in :mod:`ftp_eval.proving.grading.problem_health` as
+    :class:`HealthKind`.
+
+    Kept as an enum rather than dropped so the verdict's JSON shape stays
+    stable and a second kind of faithfulness evidence (a second judge, a
+    human review) has somewhere to go.
+    """
+
     JUDGE_FAITHFUL = "judge_faithful"
 
 
@@ -70,15 +76,15 @@ class Check:
 class StatementStatus(str, Enum):
     """Verdict on a formalization."""
 
-    #: Every check that ran passed.
+    #: A judge read the formalization as faithful to its prose.
     OK = "ok"
-    #: Definitely broken: it does not typecheck, or contains a placeholder.
-    MALFORMED = "malformed"
-    #: Typechecks, but something is off -- trivially true, vacuous, or a
-    #: judge read it as not matching the problem.
-    SUSPICIOUS = "suspicious"
-    #: Nothing conclusive could be established (no judge configured, no
-    #: prover available, backend cannot build probes for this language).
+    #: A judge read it as *not* matching the problem. A definite negative,
+    #: not a suspicion -- which is why it is not called "suspicious" any
+    #: more. Whether the Lean is well formed is a separate question, asked
+    #: by :mod:`ftp_eval.proving.grading.problem_health`.
+    UNFAITHFUL = "unfaithful"
+    #: Nothing was established: no judge configured, no prose to judge
+    #: against, the judge abstained, or the API failed. Never a pass.
     INCONCLUSIVE = "inconclusive"
     #: The harness broke.
     ERROR = "error"
@@ -116,17 +122,16 @@ class StatementVerdict:
 
     @property
     def checked_faithfulness(self) -> bool:
-        """Whether semantic faithfulness was actually assessed.
+        """Whether a judge actually returned a verdict.
 
-        The prover-decidable checks catch malformed and degenerate
-        statements; none of them can tell you the formalization means the
-        same thing as the prose. Only a judge (or a gold comparison) can,
-        so a report distinguishes "passed the checks" from "checked".
+        False when no judge was configured, when the problem records no
+        prose to judge against, when the judge abstained, and when its API
+        failed. All four are "we do not know", and a report has to
+        distinguish that from "we checked and it is fine" -- which is the
+        whole reason this property exists rather than reading the status.
         """
         return any(
-            c.kind in (CheckKind.JUDGE_FAITHFUL, CheckKind.GOLD_EQUIVALENT)
-            and c.passed is not None
-            for c in self.checks
+            c.kind is CheckKind.JUDGE_FAITHFUL and c.passed is not None for c in self.checks
         )
 
     def to_dict(self) -> dict[str, Any]:

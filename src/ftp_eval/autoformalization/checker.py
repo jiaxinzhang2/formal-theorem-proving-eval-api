@@ -10,36 +10,33 @@ links to check, and they fail in opposite directions:
   to any amount of proof checking.
 * A **right formalization with no proof** is an honest miss.
 
-``StatementChecker`` handles the first, and it is worth being blunt about
-how: **only faithfulness can confirm a statement.** The six checks do not
-have equal powers.
+``StatementChecker`` handles the first, and it asks exactly one question::
 
-Four of them are *screens*. They can refuse a statement and they can never
-accept one::
+    judge_faithful    does it mean what the prose says?      an LLM
 
-    no_placeholder    does it assume what it should prove?     text only
-    elaborates        does it typecheck at all?                the prover
-    non_trivial       can `trivial`/`simp`/`decide` close it?   the prover
-    non_vacuous       are the hypotheses contradictory?        the prover
+That is the whole API. **There is no prover here, and no text analysis
+either.** "Does this Lean say what that English says" is not a question a
+prover can be asked, and every question that *can* be asked of a prover or
+of a regex is a question about the Lean rather than about the problem.
 
-Every one of those is a question about the Lean, not about the problem. A
-statement can pass all four and still formalize something nobody asked
-about -- so passing them yields ``INCONCLUSIVE``, not ``OK``. See
-``_status``: the only checks that can produce ``OK`` are
+That is the real asymmetry with ``proving/``. There the kernel is ground
+truth and no model is involved. Here **there is no ground truth**, so the
+affirmative answer comes from a judge that can be wrong. Everything in
+``judge.py`` -- abstention as a real answer, rechecking rejections, keeping
+every sample's label, never turning an outage into a rejection -- exists
+because of that one fact.
 
-    judge_faithful    does it mean what the prose says?        an LLM
-    gold_equivalent   is it iff-equivalent to a reference?     the prover
+Five checks used to live here: does the statement elaborate, is it
+trivially closable, are its hypotheses contradictory, is it equivalent to a
+reference, does it declare an axiom. Not one of them looks at the prose, so
+none of them was ever answering this API's question. They are in
+:mod:`ftp_eval.proving.grading.problem_health` now, answering the one they
+were really asking -- whether a problem set can be graded fairly at all.
 
-and ``gold_equivalent`` only relocates the trust, to whoever wrote the
-gold statement.
-
-That is the real asymmetry between this API and ``proving/``. There, the
-kernel is ground truth and no model is needed. Here **there is no ground
-truth**: "does this Lean say what that English says" is not a question a
-prover can be asked, so the affirmative answer comes from a judge that can
-be wrong. Everything in ``judge.py`` -- abstention as a real answer,
-rechecking rejections, keeping every sample's label, never turning an
-outage into a rejection -- exists because of that one fact.
+Run both over a problem folder before publishing it. ``ftp-eval audit``
+does, and reports them separately, because "this problem is ungradeable"
+and "this problem does not match its prose" are different failures with
+different fixes.
 """
 
 from __future__ import annotations
@@ -47,11 +44,9 @@ from __future__ import annotations
 import time
 from typing import Any, Sequence
 
+from ..backends.types import StatementTask
 from .judge import Judge, JudgeError
-from ..source.soundness import STATEMENT_HACK_CLASSES, screen_source
-from ..backends.types import ProbeKind, StatementTask, Status
 from .types import Check, CheckKind, JudgeLabel, StatementStatus, StatementVerdict
-from ..backends.verifier import Verifier
 
 __all__ = ["StatementChecker"]
 
@@ -61,32 +56,17 @@ class StatementChecker:
 
     Parameters
     ----------
-    verifier:
-        Used for the prover-decidable probes. Pass ``None`` to run judge
-        checks only; the prover checks then report "did not run" rather
-        than passing by default.
     judge:
-        Used for semantic faithfulness. Pass ``None`` to skip it -- the
-        verdict is then at best ``INCONCLUSIVE`` on faithfulness, which
-        the result records honestly via ``checked_faithfulness``.
+        Used for semantic faithfulness, which is the only thing here that
+        can return a positive verdict. Pass ``None`` to run the text screen
+        alone -- the result is then at best ``INCONCLUSIVE``, and
+        ``checked_faithfulness`` records that no judge was consulted rather
+        than implying a clean bill of health.
     """
 
-    def __init__(
-        self,
-        verifier: Verifier | None = None,
-        judge: Judge | None = None,
-        *,
-        timeout_s: float = 120.0,
-        check_trivial: bool = True,
-        check_vacuous: bool = True,
-        check_gold: bool = True,
-    ) -> None:
-        self.verifier = verifier
+    def __init__(self, judge: Judge | None = None, *, timeout_s: float = 120.0) -> None:
         self.judge = judge
         self.timeout_s = timeout_s
-        self.check_trivial = check_trivial
-        self.check_vacuous = check_vacuous
-        self.check_gold = check_gold
 
     # -- the method callers use ---------------------------------------
 
@@ -95,15 +75,6 @@ class StatementChecker:
         started = time.monotonic()
         checks: list[Check] = []
         raw: dict[str, Any] = {}
-
-        checks.append(self._check_no_placeholder(task))
-        if self.verifier is not None:
-            checks.extend(self._prover_checks(task, raw))
-        else:
-            for kind in (CheckKind.ELABORATES, CheckKind.NON_TRIVIAL, CheckKind.NON_VACUOUS):
-                checks.append(
-                    Check(kind, None, "no verifier configured, so this was not checked")
-                )
 
         judge_verdict = None
         if self.judge is not None and not task.informal_statement.strip():
@@ -141,7 +112,7 @@ class StatementChecker:
             status=self._status(checks),
             checks=tuple(checks),
             judge=judge_verdict,
-            backend=self.verifier.name if self.verifier else None,
+            backend=None,
             wall_time_s=time.monotonic() - started,
             split=task.split,
             raw=raw,
@@ -151,162 +122,6 @@ class StatementChecker:
         return [self.check(task) for task in tasks]
 
     # -- individual checks --------------------------------------------
-
-    def _check_no_placeholder(self, task: StatementTask) -> Check:
-        """The statement must not assume what it asks for.
-
-        An `axiom`, an `opaque` constant or an elaborator setting that
-        weakens the goal makes a formalization wrong before any proof is
-        attempted. Deliberately *not* checked: a `sorry` in the problem's
-        own body, which is the hole a participant fills, and `variable`
-        bindings, which are ordinary Lean. Those are screened on the answer
-        side instead -- see `STATEMENT_HACK_CLASSES`.
-        """
-        report = screen_source(
-            task.formal_statement,
-            task.language,
-            required_statement=None,
-            allowed_imports=None,
-            classes=STATEMENT_HACK_CLASSES,
-            subject="statement",
-        )
-        if report.ok:
-            return Check(
-                CheckKind.NO_PLACEHOLDER, True, "statement assumes nothing it should prove"
-            )
-        return Check(
-            CheckKind.NO_PLACEHOLDER,
-            False,
-            "; ".join(report.violations),
-            fatal=True,
-        )
-
-    def _prover_checks(self, task: StatementTask, raw: dict[str, Any]) -> list[Check]:
-        assert self.verifier is not None
-        checks: list[Check] = []
-
-        elaborates = self._run_probe(task, ProbeKind.ELABORATES, raw)
-        if elaborates is None:
-            checks.append(
-                Check(
-                    CheckKind.ELABORATES,
-                    None,
-                    "backend %r cannot build an elaboration probe for %s"
-                    % (self.verifier.name, task.language),
-                )
-            )
-        elif elaborates is Status.VERIFIED:
-            checks.append(Check(CheckKind.ELABORATES, True, "statement typechecks on its own"))
-        elif elaborates in (Status.ERROR, Status.SKIPPED):
-            checks.append(
-                Check(CheckKind.ELABORATES, None, "probe could not run (%s)" % elaborates.value)
-            )
-        else:
-            # This is decisive: a statement that does not typecheck cannot
-            # be the formalization of anything.
-            checks.append(
-                Check(
-                    CheckKind.ELABORATES,
-                    False,
-                    "statement does not typecheck, so it is not a well-formed "
-                    "formalization (%s)" % elaborates.value,
-                    fatal=True,
-                )
-            )
-            # The remaining probes would all fail for the same reason.
-            for kind in (CheckKind.NON_TRIVIAL, CheckKind.NON_VACUOUS):
-                checks.append(Check(kind, None, "skipped: the statement does not typecheck"))
-            return checks
-
-        if self.check_trivial:
-            checks.append(self._check_trivial(task, raw))
-        if self.check_vacuous:
-            checks.append(self._check_vacuous(task, raw))
-        if self.check_gold and task.gold_formal_statement:
-            checks.append(self._check_gold(task, raw))
-        return checks
-
-    def _check_trivial(self, task: StatementTask, raw: dict[str, Any]) -> Check:
-        """A goal a one-liner closes is usually a lost formalization.
-
-        Not always: some problems really are one ``simp`` away, so this is
-        reported as suspicious rather than fatal. What it reliably catches
-        is the degenerate case -- a statement collapsed to ``True``, or to
-        a closed arithmetic identity ``decide`` evaluates.
-        """
-        outcome = self._run_probe(task, ProbeKind.TRIVIAL, raw)
-        if outcome is None:
-            return Check(CheckKind.NON_TRIVIAL, None, "no triviality probe available")
-        if outcome in (Status.ERROR, Status.SKIPPED):
-            return Check(CheckKind.NON_TRIVIAL, None, "probe could not run (%s)" % outcome.value)
-        if outcome is Status.VERIFIED:
-            return Check(
-                CheckKind.NON_TRIVIAL,
-                False,
-                "a single cheap tactic closes this goal, which usually means the "
-                "formalization lost the content of the problem",
-            )
-        return Check(CheckKind.NON_TRIVIAL, True, "not closable by a cheap tactic")
-
-    def _check_vacuous(self, task: StatementTask, raw: dict[str, Any]) -> Check:
-        """Contradictory hypotheses make a theorem true and worthless.
-
-        This is the reward hack the kernel cannot help with at all: the
-        proof is *genuinely valid*, the kernel is *entirely satisfied*,
-        and the theorem still says nothing, because anything follows from
-        a contradiction. It can only be caught by interrogating the
-        statement, which is why it lives here and not in the proof checks.
-        """
-        outcome = self._run_probe(task, ProbeKind.VACUOUS, raw)
-        if outcome is None:
-            return Check(
-                CheckKind.NON_VACUOUS,
-                None,
-                "no vacuity probe available (the statement has no hypotheses, or does "
-                "not parse)",
-            )
-        if outcome in (Status.ERROR, Status.SKIPPED):
-            return Check(CheckKind.NON_VACUOUS, None, "probe could not run (%s)" % outcome.value)
-        if outcome is Status.VERIFIED:
-            return Check(
-                CheckKind.NON_VACUOUS,
-                False,
-                "`False` is derivable from the hypotheses, so the statement is "
-                "vacuously true and any proof of it proves nothing",
-            )
-        return Check(CheckKind.NON_VACUOUS, True, "hypotheses are not contradictory")
-
-    def _check_gold(self, task: StatementTask, raw: dict[str, Any]) -> Check:
-        """Compare against a reference formalization, via the prover.
-
-        Asking the prover for an ``Iff`` is far stronger than comparing
-        text: it accepts a differently-phrased but equivalent statement,
-        which textual comparison would wrongly reject.
-        """
-        outcome = self._run_probe(task, ProbeKind.GOLD_EQUIVALENT, raw)
-        if outcome is None:
-            return Check(
-                CheckKind.GOLD_EQUIVALENT,
-                None,
-                "cannot compare to the reference: the two statements have different "
-                "binders, so no equivalence can be stated between them",
-            )
-        if outcome in (Status.ERROR, Status.SKIPPED):
-            return Check(
-                CheckKind.GOLD_EQUIVALENT, None, "probe could not run (%s)" % outcome.value
-            )
-        if outcome is Status.VERIFIED:
-            return Check(
-                CheckKind.GOLD_EQUIVALENT, True, "provably equivalent to the reference statement"
-            )
-        # Failing to *prove* the equivalence is not proof of inequivalence:
-        # the tactics tried are weak, and a true equivalence can be hard.
-        return Check(
-            CheckKind.GOLD_EQUIVALENT,
-            None,
-            "equivalence with the reference could not be proved by the cheap tactics "
-            "tried; this is not evidence that the two differ",
-        )
 
     def _check_from_judge(self, verdict: Any) -> Check:
         label = verdict.label
@@ -321,41 +136,18 @@ class StatementChecker:
             "judge abstained (%s): %s" % (verdict.aggregation, verdict.reasoning[:300]),
         )
 
-    # -- plumbing -----------------------------------------------------
-
-    def _run_probe(
-        self, task: StatementTask, kind: ProbeKind, raw: dict[str, Any]
-    ) -> Status | None:
-        assert self.verifier is not None
-        source = self.verifier.build_probe(task, kind)
-        if source is None:
-            return None
-        result = self.verifier.probe(task, source, timeout_s=self.timeout_s)
-        raw["probe_%s" % kind.value] = {
-            "status": result.status.value,
-            "source": source,
-            "diagnostics": [d.to_dict() for d in result.diagnostics[:3]],
-        }
-        return result.status
-
     def _status(self, checks: Sequence[Check]) -> StatementStatus:
         """Combine checks into one verdict.
 
-        Ordering: anything fatal makes it ``MALFORMED``; any other failed
-        check makes it ``SUSPICIOUS``; all-passed with at least one
-        faithfulness check makes it ``OK``; otherwise ``INCONCLUSIVE``,
-        because passing only the structural checks is not evidence that
-        the statement means the right thing.
+        Three outcomes, and the third is the important one: a judgement
+        that was never obtained is ``INCONCLUSIVE``, never a pass. No
+        judge, no prose to judge against, an abstention and an API outage
+        all land there, because none of them is evidence that the
+        formalization is right.
         """
-        if any(c.passed is False and c.fatal for c in checks):
-            return StatementStatus.MALFORMED
         if any(c.passed is False for c in checks):
-            return StatementStatus.SUSPICIOUS
-        assessed_meaning = any(
-            c.kind in (CheckKind.JUDGE_FAITHFUL, CheckKind.GOLD_EQUIVALENT) and c.passed is True
-            for c in checks
-        )
-        if assessed_meaning:
+            return StatementStatus.UNFAITHFUL
+        if any(c.passed is True for c in checks):
             return StatementStatus.OK
         return StatementStatus.INCONCLUSIVE
 
