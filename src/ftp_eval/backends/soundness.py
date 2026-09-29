@@ -5,17 +5,21 @@ are both Lean source, and both can contain something that makes the
 prover's verdict mean less than it appears to -- which is why this module
 sits below both APIs rather than inside the proving one:
 
-* an **answer** is screened for everything (``PROOF_HACK_CLASSES``): a
+* a **frozen-target answer** uses ``ANSWER_HACK_CLASSES``: placeholders,
+  new axioms, kernel bypasses, resource-limit changes and elaboration tricks.
+  Statement-tampering and definition-shadowing rules do not apply to that
+  interface; checking.screening enforces its namespace and syntax policy;
+* a **lower-level proof attempt** uses ``PROOF_HACK_CLASSES``: a
   placeholder the prover only warns about, the goal assumed as a fresh
   axiom, the kernel turned off, a term the statement depends on redefined;
-* a **problem** is screened for ``STATEMENT_HACK_CLASSES``, 18 of the 27
-  patterns -- a setter's helper `def` marked ``unsafe``, a helper lemma
+* a **problem** uses ``STATEMENT_HACK_CLASSES`` -- a setter's helper `def`
+  marked ``unsafe``, a helper lemma
   closed by ``native_decide``, a ``partial def`` whose termination is
   unchecked, ``#exit`` truncating the file, ``autoImplicit`` weakening the
   goal. A problem resting on unchecked computation is the setter's bug, and
   no amount of checking the answers will find it.
 
-The nine that are proof-only, and why, are in ``STATEMENT_HACK_CLASSES``:
+The proof-only exclusions are documented beside ``STATEMENT_HACK_CLASSES``:
 a problem file's ``sorry`` is the hole a participant fills, its
 ``variable`` bindings are ordinary Lean, and the heartbeat cap is about
 proof search rather than about what anything means. Screening a statement

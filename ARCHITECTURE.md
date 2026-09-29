@@ -8,7 +8,7 @@ in the grading pipeline.
 
 ```text
 proving/                    autoformalization/
-interface + grading         judge-only faithfulness
+checking + running          judge-only faithfulness
 analysis + Lean parsing
              ↓                    ↓
 backends/     prover contracts, adapters, diagnostics, source screens
@@ -26,7 +26,7 @@ with Python's AST, including imports nested inside functions.
 src/ftp_eval/
   cli.py                  grade, audit, backends, judges, doctor
   registry.py             backend and judge registration
-  io.py                   JSONL input/output
+  jsonl.py                JSONL input/output
   spec/
     benchmark.py          Benchmark and BenchmarkProblem
     artifacts.py          ArtifactWriter
@@ -34,25 +34,74 @@ src/ftp_eval/
   backends/
     types.py              ModuleSource, ModuleBuild and verifier data
     verifier.py           low-level prover interface
-    lean4.py              ordered module builds and fresh processes
-    lean4_docker.py       immutable Linux worker image and kernel replay
-    container.py          bounded local executor; cloud executor contract
-    mock.py, axle.py       lower-level test / HTTP backends
+    lean4.py              ordered module builds and native Lean tool calls
+    lean4_docker.py        Lean adapter dispatching all tools to a worker
+    lean_diagnostics.py   Lean log parsing and exact axiom listings
+    execution/
+      base.py             immutable jobs, results and cloud executor contract
+      docker.py           bounded Docker execution and artifact validation
+    mock.py               lower-level test backend
+    axle.py               lower-level HTTP backend
     soundness.py           source screening and axiom audit
     comments.py            comment scanner
   proving/
-    interface.py          frozen target, policy, kernel ascription, axiom audit
     lean_file.py          lightweight source parser (not a Lean elaborator)
-    grading/
-      contest.py          load benchmark/submissions; grade each answer
-      results.py          interface verdict plus proof metrics
-      artifacts.py        durable stage checkpoints and run outputs
-      metadata.py         provenance, manifest, toolchain reconciliation
-      statistics.py       aggregate all answers, including refusals
+    checking/
+      interface.py        frozen interface, report and authoritative verdict
+      screening.py        parse the interface and refuse forbidden answers
+      policy.py           allowed imports, axioms, instances and replay policy
+      modules.py          trusted Goal and generated Check sources
+      evaluator.py        single-submission verification stages
+    running/
+      inputs.py           load folders and snapshot benchmark/submissions
+      manifest.py         declared benchmark settings and policy loading
+      provenance.py       per-problem source and metadata
+      environment.py      observe and validate the actual toolchain
+      recording.py        checkpoint checking verdicts and attach measurements
+      pipeline.py         preflight, answer loop and report lifecycle
+      results.py          answer, participant and benchmark result types
+      run_directory.py    durable stage checkpoints and folder outputs
+      summary.py          aggregate all answers, including refusals
       problem_health.py   frozen-target universal probes and legacy theorem probes
-    analysis/             metrics and failure/success classification
+    analysis/
+      metrics.py          attach proof and statement measurements to verdicts
+      classification.py   success/failure labels and attribution
+      statistics.py       distributions and outcome correlations
+      tactics.py          tactic extraction and usage summaries
+      proof_structure.py  proof shape and repetition measurements
+      statement_metrics.py proposition complexity measurements
   autoformalization/      faithfulness judges, voting, verdicts
 ```
+
+`checking` decides whether a proof satisfies the frozen target. Its evaluator
+runs the stages, and `checking/interface.py` defines the single `solved` rule.
+`running` organizes a benchmark and records results. `running/recording.py`
+delegates the check, saves sources/events and attaches metrics; its `GradedAnswer`
+inherits that same rule without overriding it. `analysis` describes proofs and
+outcomes; it never grants acceptance.
+
+The policy has one semantic owner, `checking/policy.py`. `running/manifest.py`
+loads the benchmark's choices into that policy; it does not implement another
+policy check. Backend and autoformalization `types.py` files hold the distinct
+data contracts of those APIs. Proof measurements live in `analysis/proof_structure.py`,
+statement measurements in `analysis/statement_metrics.py`, and `analysis/metrics.py`
+combines them. `analysis/statistics.py` supplies distributions/correlations;
+`running/summary.py` aggregates benchmark verdicts.
+
+Import concrete modules inside the implementation and use `ftp_eval`,
+`proving.checking` or `proving.running` for public exports.
+
+Source lives under `src/` so the repository root is separate from the installed
+Python package. `scripts/` contains developer entry points that use that package:
+`measure_metrics_speed.py` measures Python overhead, and `smoke_docker.py`
+checks a real organizer image. Tests mirror the source responsibilities in
+`tests/checking`, `tests/running`, `tests/backends`, `tests/analysis` and
+`tests/autoformalization`; CLI and dependency-layer checks stay at the test root.
+
+The earlier internal paths `proving.interface`, `grading.contest`,
+`grading.metadata`, `backends.container`, `analysis.measure`, `analysis.modes`,
+`analysis.stats` and `ftp_eval.io` have been replaced by the owners above.
+Top-level `ftp_eval` exports, CLI commands and persisted run schemas are unchanged.
 
 ## Execution and persistence
 
@@ -98,6 +147,12 @@ source reader handles ordinary literal `lean_lib` declarations; the real import
 probe remains the final capability check for dynamically configured projects.
 
 See [container workers](docs/container-workers.md) for the AWS executor boundary.
+
+The Docker adapter inherits staging and module orchestration, but overrides the
+tool runner: `_build_one -> _run_lean -> self._run_tool -> ContainerExecutor.run`.
+Capability probes, compilation, replay and dependency extraction all dispatch
+through that boundary. Host directories hold source inputs and returned artifacts;
+they are never used as a native Lake project by this adapter.
 
 Read [benchmark format](benchmarks/README.md), [run outputs](docs/runs.md),
 [backend contract](docs/adding-a-backend.md) and [tests](tests/README.md).

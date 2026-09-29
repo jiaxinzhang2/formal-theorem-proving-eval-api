@@ -327,11 +327,11 @@ class VerificationResult:
     #: language) -- it does not mean the proof was empty.
     tactics: tuple[str, ...] = ()
     #: Structural metrics for the proof text (see
-    #: :func:`ftp_eval.proving.analysis.structure.analyze_proof`). Recorded for *every*
+    #: :func:`ftp_eval.proving.analysis.proof_structure.analyze_proof`). Recorded for *every*
     #: attempt, including failures and timeouts: how a model fails is as
     #: informative as how it succeeds, and comparing the two is the point.
     structure: Mapping[str, Any] = field(default_factory=dict)
-    #: Fine-grained failure classification (see :mod:`ftp_eval.proving.analysis.modes`).
+    #: Fine-grained failure classification (see :mod:`ftp_eval.proving.analysis.classification`).
     #: Set for every non-verified attempt, ``None`` for a pass. Finer than
     #: ``error_kind``: it separates a hallucinated lemma name from a real
     #: type error, and a truncated completion from bad Lean.

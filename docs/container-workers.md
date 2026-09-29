@@ -8,7 +8,7 @@ the lower-level API and is not supported by this module-only backend.
 The trusted organizer image must contain a fully built Lake project at `/project`,
 with `lean-toolchain`, `lake-manifest.json`, and `lake`, `lean`, `leanchecker`
 on PATH. Build dependencies ahead of time: evaluation containers have no network.
-`docker/Dockerfile` builds a minimal core-Lean image from an explicitly selected
+`Dockerfile` builds a minimal core-Lean image from an explicitly selected
 base digest, Lean release and official release SHA256. Mathlib benchmarks need
 an organizer image with their exact dependency revisions built into it.
 
@@ -46,6 +46,6 @@ The supplied `DockerExecutor` is a local Linux implementation; use a trusted
 Linux supervisor or run this package inside the organizer's orchestration image.
 
 Validate an organizer image on that supervisor with
-`PYTHONPATH=src python scripts/smoke_container.py IMAGE_DIGEST`. It exercises real
+`PYTHONPATH=src python scripts/smoke_docker.py IMAGE_DIGEST`. It exercises real
 Lean compilation/replay, good and broken answers, gold macro isolation, universal
 health probes, read-only execution, bounded output transfer and timeout removal.

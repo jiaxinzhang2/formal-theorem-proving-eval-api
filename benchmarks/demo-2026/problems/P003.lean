@@ -4,5 +4,5 @@
 - prose: Prove that zero is at most one.
 -/
 namespace Problem
-def Target : Prop := (0 : Nat) ≤ 1
+abbrev Target : Prop := (0 : Nat) ≤ 1
 end Problem

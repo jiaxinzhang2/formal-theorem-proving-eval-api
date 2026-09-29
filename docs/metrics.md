@@ -11,8 +11,10 @@ The unit is one answer to one problem. `runs/<run-id>/answers/<who>/<problem>.js
 carries the per-answer fields, `6-report/*.tsv` the aggregates, and
 `summary.json` the headline numbers.
 
-Where they come from: a backend reports only what the prover said, and
-`ftp_eval.proving.analysis.measure` fills the rest in. That matters here
+Where they come from: a backend reports what the prover said.
+`ftp_eval.proving.running.recording` attaches report measurements using
+`ftp_eval.proving.analysis.metrics`, `proof_structure`, `statement_metrics` and
+outcome classification. That matters here
 because metrics are collected for answers **refused at stage 1** too —
 those never reach a prover, so nothing else would record their shape, and
 they are where the patterns are.
@@ -56,7 +58,7 @@ Two different questions about a problem, asked by two different things, and
 reported separately because they have different fixes. Both come from
 `ftp-eval audit --problems P/`.
 
-### 3a. Is it fit to grade? — `proving/grading/problem_health.py`
+### 3a. Is it fit to grade? — `proving/running/problem_health.py`
 
 | check | decided by |
 |---|---|
@@ -148,7 +150,7 @@ one that solves 40% with twenty tactics.
 ## 5b. What carries signal
 
 The reason for collecting this many metrics is to find which ones matter.
-`correlate_with_success` in `proving/analysis/stats.py` does that search
+`correlate_with_success` in `proving/analysis/statistics.py` does that search
 once per run: point-biserial correlation between every numeric metric and
 solved/not, ranked by magnitude, with metrics below |r| = 0.1 dropped so
 the table stays readable. Each row reports `r`, `n`, and the metric's mean
@@ -303,7 +305,7 @@ exercise as `brute_force_decide` climbs.
 ## Cost of measuring
 
 Measured, not estimated, and enforced. Reproduce with
-`python scripts/measure_speed.py`; CI runs it with `--check`.
+`python scripts/measure_metrics_speed.py`; CI runs it with `--check`.
 
 Windows AMD64, CPython 3.12, best-of-N:
 
@@ -329,7 +331,7 @@ orders of magnitude and the analysis layer is a rounding error.
 
 Absolute budgets catch gross slowdowns but mean different things on
 different machines. The real guarantee is complexity, checked by
-**machine-independent scaling tests** in `tests/test_performance.py`: each
+**machine-independent scaling tests** in `tests/analysis/test_performance.py`: each
 measures cost at size *n* and *4n* and fails if the ratio approaches
 quadratic. Covered: `analyze_proof` (chained, wide and repetitive inputs),
 `extract_tactics`, `screen_source` with and without statement checks,

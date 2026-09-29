@@ -4,23 +4,31 @@
 pytest
 ruff check src tests scripts
 mypy
-python scripts/measure_speed.py --check
+python scripts/measure_metrics_speed.py --check
 ```
 
 The Python suite does not require Lean. Simulated module-build responses exercise
 control flow and persistence; they are not real kernel verification.
 
-- `test_interface.py`: frozen interface, helpers, imports, axiom auditing and Check generation.
-- `test_grading.py`: benchmark groups, policies, gold arguments, partial runs and durable checkpoints.
-- `test_cli_and_io.py`: CLI, registry, JSONL and HTTP mapping.
+- `checking/`: frozen interface, helpers, imports, syntax screening and Goal/Check generation.
+- `running/`: input groups, policies, environment pins, metrics, health probes,
+  storage contracts, partial runs and durable checkpoints.
+- `backends/`: Lean diagnostics, ordered builds, cache identity, replay failure
+  paths, Docker isolation, safe artifact transfer, source screens and HTTP mapping.
+- `analysis/`: tactics, structure, statement complexity, outcome classification
+  and performance guarantees.
+- `autoformalization/`: statement faithfulness, judge responses and consensus.
+- `test_cli.py`: command behavior, diagnostics, audit output and default run records.
 - `test_layering.py`: AST import boundaries and implemented benchmark/artifact contracts.
-- `test_reward_hacking.py`, `test_soundness.py`, `test_comments.py`: source screening.
-- `test_problem_health.py`, `test_statement_and_judge.py`: statement auditing.
-- `test_frozen_regressions.py`: frozen probes, syntax policy, gold boundary,
-  environment pins, generic storage and safe container output.
-- `test_lean4_parsing.py`: Lean diagnostics; `test_module_builds.py`: isolated
-  builds, real module-name probes, replay failure paths and trusted cache identity.
-- Analysis, mode and performance tests cover proof metrics and scaling.
+
+Place regressions beside the behavior they protect. There is no catch-all
+regression file spanning submission rules, environment checks and worker execution.
+
+Tests mirror the leaf package name and omit the intermediate `proving/` layer:
+`src/ftp_eval/proving/checking/` maps to `tests/checking/`, `proving/running/`
+to `tests/running/`, and `proving/analysis/` to `tests/analysis/`. The top-level
+`backends/` and `autoformalization/` packages map directly to their test folders.
+The one-file `tests/autoformalization/` directory follows that same rule.
 
 The speed script measures Python analysis and grading overhead with the mock
 backend. It does not measure real Lean module-build throughput.

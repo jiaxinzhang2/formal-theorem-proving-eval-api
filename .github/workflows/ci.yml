@@ -29,12 +29,12 @@ jobs:
         run: pytest -q
 
       # The analysis layer runs on every attempt of every run, so a
-      # complexity regression is silently expensive. tests/test_performance.py
+      # complexity regression is silently expensive. tests/analysis/test_performance.py
       # holds the machine-independent scaling guarantees (ratio at n vs 4n);
       # this enforces the absolute budgets and prints the numbers into the
       # log so a slowdown is visible even when it stays under budget.
       - name: Metrics performance budgets
-        run: python scripts/measure_speed.py --check
+        run: python scripts/measure_metrics_speed.py --check
 
       - name: Lint
         run: ruff check src tests scripts

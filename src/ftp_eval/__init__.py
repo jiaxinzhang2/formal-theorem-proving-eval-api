@@ -8,18 +8,11 @@ from .autoformalization.checker import StatementChecker
 from .proving.analysis.statement_metrics import StatementComplexity, analyze_statement
 from .autoformalization.judge import ConsensusJudge, Judge, JudgeError, MockJudge
 from .backends.comments import strip_comments
-from .io import read_jsonl, write_jsonl
-from .proving.analysis.modes import (
-    Attribution,
-    FailureMode,
-    SuccessMode,
-    classify_failure,
-    classify_success,
-    looks_truncated,
-)
-from .proving.analysis.structure import ProofStructure, analyze_proof
+from .jsonl import read_jsonl, write_jsonl
+from .proving.analysis.classification import Attribution, FailureMode, SuccessMode, classify_failure, classify_success, looks_truncated
+from .proving.analysis.proof_structure import ProofStructure, analyze_proof
 from .proving.analysis.tactics import extract_tactics
-from .proving.grading import (
+from .proving.running import (
     ContestResult,
     GradedAnswer,
     ProblemSet,
@@ -32,11 +25,11 @@ from .proving.grading import (
     load_submissions,
 )
 from .proving.lean_file import LeanDeclaration, LeanFile, parse_lean_file
-from .proving.interface import (
-    ContestPolicy, InterfaceFault, InterfaceProblem, InterfaceReport,
-    InterfaceVerdict, grade_interface, evaluate_submission, read_interface_problem, check_interface,
-    build_check_source,
-)
+from .proving.checking.policy import ContestPolicy
+from .proving.checking.interface import InterfaceFault, InterfaceProblem, InterfaceReport, InterfaceVerdict
+from .proving.checking.evaluator import grade_interface, evaluate_submission
+from .proving.checking.screening import read_interface_problem, check_interface
+from .proving.checking.modules import build_check_source
 from .backends.types import ModuleBuild, ModuleSource
 from .backends.verifier import (
     BackendUnavailable,
@@ -55,7 +48,7 @@ from .registry import (
     register_judge,
 )
 from .backends.soundness import HackClass, audit_axioms, screen_source
-from .proving.analysis.stats import Correlation, correlate_with_success, distribution, point_biserial
+from .proving.analysis.statistics import Correlation, correlate_with_success, distribution, point_biserial
 from .backends.types import (
     Assembly,
     BackendInfo,

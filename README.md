@@ -17,6 +17,18 @@ isolation. The axiom audit checks the proof's transitive dependencies and reject
 `sorryAx` and axioms outside the benchmark's allowed list. These safeguards and
 their limits are described in [soundness policy](docs/soundness.md).
 
+## Reading order
+
+Start with this README for installation and a first run. Then read
+[benchmark format](benchmarks/README.md) to prepare problems and answers, followed
+by [run outputs](docs/runs.md) to interpret saved results.
+
+For development, continue with [architecture and source map](ARCHITECTURE.md)
+and [test organization](tests/README.md). The remaining pages are references:
+[Docker workers](docs/container-workers.md), [backend integration](docs/adding-a-backend.md),
+[soundness policy](docs/soundness.md), and [metrics fields](docs/metrics.md).
+The longer metrics reference is not a prerequisite for a first run.
+
 ## Install
 
 ```bash
@@ -29,9 +41,9 @@ Lean grading additionally requires a configured, built Lake project.
 ## The interface
 
 ```lean
--- Bench/P001.lean: trusted, compiled before any answer
+-- FtpEvalBench/P001.lean: trusted, compiled before any answer
 namespace Problem
-def Target (n : Nat) : Prop := n = 1
+abbrev Target (n : Nat) : Prop := n = 1
 end Problem
 ```
 
@@ -49,6 +61,9 @@ The generated `Check.lean` imports the problem and answer, states the required
 target type, cites `Submission.solution`, and prints its axioms. Helpers are
 never compared against the problem's declarations. See
 [the complete example](examples/frozen-target/) and [architecture](ARCHITECTURE.md).
+`abbrev Target` is recommended for tactic transparency. For a `def Target`,
+`omega` and similar tactics may need `unfold Problem.Target` first; see the
+[benchmark convention](benchmarks/README.md).
 
 ## Grade a benchmark
 
@@ -128,7 +143,7 @@ recorded by the analysis layer. Metrics do not establish correctness; see
 pytest
 ruff check src tests scripts
 mypy
-python scripts/measure_speed.py --check
+python scripts/measure_metrics_speed.py --check
 ```
 
 Tests use synthetic module-build responses to exercise the grading and persistence
@@ -138,12 +153,15 @@ analysis and grading overhead; it does not benchmark real Lean compilation.
 
 ## Repository map
 
-- `src/ftp_eval/`: library and CLI; [architecture](ARCHITECTURE.md).
+- `src/ftp_eval/`: installed library and CLI; [architecture](ARCHITECTURE.md).
+  `proving/checking/` checks answers, `proving/running/` runs benchmarks,
+  `backends/execution/` isolates workers, and `proving/analysis/` measures outcomes.
 - `benchmarks/`: problem modules and grouped submission fixtures.
 - `examples/`: a frozen-target interface example with a trusted gold Goal.
-- `tests/`: regression tests.
-- `scripts/`: development utilities.
+- `tests/`: tests grouped by submission, grading, backends, analysis and faithfulness.
+- `scripts/`: developer entry points for Python speed budgets and Docker smoke checks.
 - `docs/`: backend, soundness, metrics and run references.
+- `Dockerfile`: minimal organizer-image build; [worker setup](docs/container-workers.md).
 - `runs/`: generated local results, excluded from Git.
 
 ## License

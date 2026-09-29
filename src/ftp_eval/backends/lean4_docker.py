@@ -8,7 +8,8 @@ import uuid
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
-from .container import ContainerExecutor, ContainerJob, DockerExecutor, pinned_image
+from .execution.base import ContainerExecutor, ContainerJob, pinned_image
+from .execution.docker import DockerExecutor
 from .lean4 import Lean4Verifier
 from .types import BackendInfo, ProofAttempt, ProofTask
 from .verifier import BackendUnavailable, RawVerdict

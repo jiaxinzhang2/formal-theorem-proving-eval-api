@@ -3,7 +3,7 @@
 ```text
 demo-2026/
   benchmark.json
-  problems/P001.lean              namespace Problem; def Target ...
+  problems/P001.lean              namespace Problem; abbrev Target ...
   submissions/alice/P001.lean     imports FtpEvalBench.P001; exports Submission.solution
   submissions/bob/P001.lean
 ```
@@ -11,6 +11,31 @@ demo-2026/
 A file's stem is its problem id. Each problem module defines `Problem.Target`.
 Problem modules are compiled independently, so that namespace can be reused for
 different problems. Answers may add arbitrary helpers inside `Submission`.
+
+Declare the target as a `def` or `abbrev` with an explicit result type `: Prop`.
+We recommend `abbrev`: it is reducible, so tactics can inspect the proposition
+more easily. Both forms elaborate in the sealed problem module and preserve the
+same frozen-target boundary.
+
+```lean
+namespace Problem
+abbrev Target (n : Nat) : Prop := n = 1
+end Problem
+```
+
+For an existing `def Target`, tactics such as `omega` may leave the goal hidden
+behind the definition. Unfold it first, or use `simp [Problem.Target]`:
+
+```lean
+namespace Submission
+theorem solution : Problem.Target 1 := by
+  unfold Problem.Target
+  omega
+end Submission
+```
+
+This is tactic preparation, not an additional submission requirement: proofs
+using definitional equality can also work without an explicit unfolding step.
 
 Module names default to `FtpEvalBench.<problem-id>`. Pin custom module names, gold values
 and policy explicitly in `benchmark.json`:

@@ -186,7 +186,7 @@ class Verifier(abc.ABC):
             # Deliberately no metrics here. A backend reports what the
             # prover said; deciding what to measure about a proof belongs
             # to the API that consumes it, so a verdict is passed through
-            # `proving.analysis.measure` to be filled in.
+            # `proving.analysis.metrics` to be filled in.
             report = soundness or SoundnessReport()
             return VerificationResult(
                 task_id=task.task_id,

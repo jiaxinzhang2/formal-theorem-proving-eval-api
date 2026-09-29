@@ -29,7 +29,7 @@ class CheckKind(str, Enum):
     One kind, because this API asks one question. Everything that used to
     be here -- elaborates, non_trivial, non_vacuous, gold_equivalent,
     no_placeholder -- asked about the Lean rather than about the prose, and
-    lives in :mod:`ftp_eval.proving.grading.problem_health` as
+    lives in :mod:`ftp_eval.proving.running.problem_health` as
     :class:`HealthKind`.
 
     Kept as an enum rather than dropped so the verdict's JSON shape stays
@@ -81,7 +81,7 @@ class StatementStatus(str, Enum):
     #: A judge read it as *not* matching the problem. A definite negative,
     #: not a suspicion -- which is why it is not called "suspicious" any
     #: more. Whether the Lean is well formed is a separate question, asked
-    #: by :mod:`ftp_eval.proving.grading.problem_health`.
+    #: by :mod:`ftp_eval.proving.running.problem_health`.
     UNFAITHFUL = "unfaithful"
     #: Nothing was established: no judge configured, no prose to judge
     #: against, the judge abstained, or the API failed. Never a pass.

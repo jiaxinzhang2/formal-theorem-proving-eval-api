@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import pathlib
 import ast
+import re
 
 import pytest
 
@@ -58,6 +59,25 @@ def _edges() -> list[tuple[str, str, str]]:
     return out
 
 
+def test_checking_and_analysis_do_not_depend_on_running():
+    """Run recording consumes checks and measurements, never the reverse."""
+    forbidden = {"checking": {"running", "analysis"}, "analysis": {"running", "checking"}}
+    for module in _modules():
+        parts = module.relative_to(ROOT).parts
+        if len(parts) < 3 or parts[0] != "proving" or parts[1] not in forbidden:
+            continue
+        for node in ast.walk(ast.parse(module.read_text(encoding="utf-8"))):
+            targets = []
+            if isinstance(node, ast.ImportFrom):
+                targets = [_resolve(module, "." * node.level, node.module or "") if node.level
+                           else (node.module or "").removeprefix("ftp_eval.")]
+            elif isinstance(node, ast.Import):
+                targets = [a.name.removeprefix("ftp_eval.") for a in node.names]
+            for target in targets:
+                assert not any(target == "proving." + role or target.startswith("proving." + role + ".")
+                               for role in forbidden[parts[1]]), "%s imports %s" % (module, target)
+
+
 def test_every_import_goes_strictly_downward():
     violations = [
         "%s imports %s/ (layer %d -> %d)" % (module, dst, LAYER[src], LAYER[dst])
@@ -94,6 +114,38 @@ def test_no_catch_all_layer_came_back():
         )
 
 
+def test_architecture_source_map_names_real_paths():
+    """A published source map must lead readers to existing files."""
+    architecture = (ROOT.parents[1] / "ARCHITECTURE.md").read_text(encoding="utf-8")
+    tree = architecture.split("```text\nsrc/ftp_eval/\n", 1)[1].split("```", 1)[0]
+    directories = [(0, ROOT)]
+    for line in tree.splitlines():
+        if not line.strip():
+            continue
+        indent = len(line) - len(line.lstrip())
+        name = line.strip().split()[0]
+        while directories[-1][0] >= indent:
+            directories.pop()
+        target = directories[-1][1] / name
+        assert target.is_dir() if name.endswith("/") else target.is_file(), str(target)
+        if name.endswith("/"):
+            directories.append((indent, target))
+
+
+def test_documentation_local_links_resolve():
+    """Moving a file must also update the docs that link to it."""
+    repository = ROOT.parents[1]
+    pages = [repository / "README.md", repository / "ARCHITECTURE.md"]
+    for folder in ("docs", "benchmarks", "examples", "scripts", "tests"):
+        pages.extend((repository / folder).rglob("*.md"))
+    for page in pages:
+        for target in re.findall(r"\[[^\]]*\]\(([^)]+)\)", page.read_text(encoding="utf-8")):
+            if "://" in target or target.startswith("#"):
+                continue
+            target = target.split("#", 1)[0].strip("<>")
+            assert (page.parent / target).exists(), "%s links to missing %s" % (page, target)
+
+
 @pytest.mark.parametrize("layer", sorted(LAYER))
 def test_every_layer_exists_and_is_a_package(layer):
     directory = ROOT / layer
@@ -113,8 +165,8 @@ def test_the_spec_abcs_are_actually_implemented():
     collisions (`manifest`, `problems`), which is the whole argument for
     having the check.
     """
-    from ftp_eval.proving.grading.artifacts import RunDirectory
-    from ftp_eval.proving.grading.contest import ProblemSet
+    from ftp_eval.proving.running.run_directory import RunDirectory
+    from ftp_eval.proving.running.inputs import ProblemSet
     from ftp_eval.spec import ArtifactWriter, Benchmark
 
     assert issubclass(ProblemSet, Benchmark)
@@ -130,7 +182,7 @@ def test_a_dataclass_field_never_shadows_a_contract_method():
     would get "'dict' object is not callable" at runtime rather than
     anything a type checker flags.
     """
-    from ftp_eval.proving.grading.contest import ProblemSet
+    from ftp_eval.proving.running.inputs import ProblemSet
     from ftp_eval.spec import Benchmark
 
     fields = set(ProblemSet.__dataclass_fields__)

@@ -10,10 +10,10 @@ from typing import Any, Sequence
 from . import __version__
 from .autoformalization.checker import StatementChecker, format_statement_summary
 from .autoformalization.types import StatementStatus
-from .proving.grading import grade_contest, load_problem_set, load_submissions
-from .proving.grading.problem_health import check_problem_health, format_health_summary
+from .proving.running import grade_contest, load_problem_set, load_submissions
+from .proving.running.problem_health import check_problem_health, format_health_summary
 from .registry import available, available_judges, create, create_judge
-from .io import write_jsonl
+from .jsonl import write_jsonl
 from .backends.types import ProofAttempt, ProofTask, StatementTask, Status
 
 EXIT_OK = 0

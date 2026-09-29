@@ -4,5 +4,5 @@
 - prose: Show that the requested natural number is one.
 -/
 namespace Problem
-def Target (n : Nat) : Prop := n = 1
+abbrev Target (n : Nat) : Prop := n = 1
 end Problem

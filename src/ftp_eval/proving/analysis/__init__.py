@@ -1,26 +1,7 @@
-"""What happened, for passes and failures alike.
+"""Metrics and outcome classification for accepted and refused proof attempts.
 
-None of this decides whether an attempt succeeded -- that is the two link
-layers' job. This is what you read afterwards to understand *why*, and it
-runs on every attempt regardless of outcome, because how a model fails is
-as informative as how it succeeds and most of these are only interesting
-as the comparison between the two.
-
-* :mod:`~ftp_eval.proving.analysis.tactics` -- which tactics, in what order, with
-  what opening, closing and transition patterns.
-* :mod:`~ftp_eval.proving.analysis.structure` -- proof shape (declarations, named
-  steps, dependency depth, nesting, comments, repetition), statement
-  complexity, distributions, and the metric/outcome correlation search.
-* :mod:`~ftp_eval.proving.analysis.modes` -- fine-grained failure modes with an
-  attribution (model vs budget vs harness), and success modes describing
-  what kind of proof passed.
-* :mod:`~ftp_eval.proving.analysis.scoring` -- unbiased pass@k and the ``Summary``
-  that ties all of it together.
-
-Measured cost of the whole layer: ~0.18 ms per attempt. See
-``scripts/measure_speed.py`` and ``tests/test_performance.py``.
+Tactics and proof_structure describe proofs; statement_metrics describes propositions.
+metrics attaches those measurements to verdicts, classification labels outcomes,
+and statistics provides distributions and correlations.
 """
-
-from __future__ import annotations
-
-__all__ = ["tactics", "structure", "modes", "scoring"]
+__all__ = ["tactics", "proof_structure", "statement_metrics", "metrics", "classification", "statistics"]

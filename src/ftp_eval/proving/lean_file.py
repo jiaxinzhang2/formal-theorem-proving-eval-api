@@ -1,15 +1,12 @@
-"""Splitting a Lean 4 file into declarations.
+"""Read Lean declarations, namespaces, signatures and bodies lexically.
 
-Needed because the real unit of submission is a *file*, not a statement.
-A formal-conjectures file holds several theorems plus the ``abbrev``
-definitions they share, and a participant submits a whole file back. To
-judge a submission you have to find the target declaration in both files,
-which means knowing where each declaration starts and ends.
+Frozen-target screening uses this reader to locate Problem.Target and
+Submission.solution. Provenance and proof analysis use its attributes and
+declaration bodies. It does not elaborate Lean or compare theorem statements
+for acceptance; the generated Check module and kernel settle proof validity.
 
-Deliberately lexical, and deliberately conservative: a declaration this
-cannot parse is reported as unparsed rather than guessed at, because a
-mis-sliced declaration would be compared against the wrong thing and
-produce a confident wrong verdict.
+Unrecognized declarations are recorded in LeanFile.unparsed so callers can
+refuse an unsupported shape rather than infer a declaration that is not there.
 """
 
 from __future__ import annotations

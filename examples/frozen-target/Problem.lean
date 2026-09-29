@@ -19,7 +19,7 @@ lemma givenLemma : Good 1 := by decide
 /-- The frozen proposition. Parameterized by the value the problem asks for,
 so that value lands in the answer's *type* and the kernel compares it --
 nothing has to decide whether `4` and `2 + 2` are the same string. -/
-def Target (a₀ : ℕ) : Prop :=
+abbrev Target (a₀ : ℕ) : Prop :=
   IsLeast { n | Good n } a₀
 
 end Problem

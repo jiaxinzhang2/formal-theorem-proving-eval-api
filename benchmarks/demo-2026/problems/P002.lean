@@ -4,5 +4,5 @@
 - prose: Prove True.
 -/
 namespace Problem
-def Target : Prop := True
+abbrev Target : Prop := True
 end Problem

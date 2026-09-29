@@ -1,8 +1,8 @@
 """Benchmark and artifact contracts, plus the grading vocabulary.
 
 Benchmark is implemented by ProblemSet; ArtifactWriter by RunDirectory.
-Per-answer grading is implemented by proving.interface.grade_interface:
-interface -> kernel -> axiom audit. Reporting aggregates all answers.
+Per-answer acceptance belongs to proving.checking.evaluator; proving.running
+records benchmark runs and aggregates the returned verdicts.
 """
 from .artifacts import ArtifactWriter
 from .benchmark import Benchmark, BenchmarkProblem

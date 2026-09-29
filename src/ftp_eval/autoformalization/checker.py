@@ -30,7 +30,7 @@ Five checks used to live here: does the statement elaborate, is it
 trivially closable, are its hypotheses contradictory, is it equivalent to a
 reference, does it declare an axiom. Not one of them looks at the prose, so
 none of them was ever answering this API's question. They are in
-:mod:`ftp_eval.proving.grading.problem_health` now, answering the one they
+:mod:`ftp_eval.proving.running.problem_health` now, answering the one they
 were really asking -- whether a problem set can be graded fairly at all.
 
 Run both over a problem folder before publishing it. ``ftp-eval audit``
