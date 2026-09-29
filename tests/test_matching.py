@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import pytest
 
+from ftp_eval import create
 from ftp_eval.proving.lean_file import (
     extract_answer_arguments,
     normalize_signature,
@@ -281,21 +282,91 @@ def test_helper_lemmas_are_noted_not_penalized():
 # -- convention checks -------------------------------------------------
 
 
-def test_a_multi_theorem_problem_file_is_reported():
-    """One problem per file is the convention; verify rather than assume.
+def test_a_shipped_helper_lemma_does_not_become_the_target():
+    """The bug this replaced a weaker test for.
 
-    If it is violated and no target is named, some theorem was picked and
-    every verdict is about that one, so the inference is made visible.
+    A problem file may ship proved helper lemmas next to the theorem it
+    asks. Target inference used to fall back to ``statements[0]``, which in
+    that layout is the first *helper* -- so an answer that copied the helper
+    verbatim was graded against it, reported `matched`, and the actual
+    theorem was never examined. A silent false pass.
     """
     extra = "@[category textbook]\ntheorem other : (1 : ℕ) = 1 := by rfl\n\nend Erdos1"
+    # The helper comes first, which is what made the old fallback pick it.
     two_problem = PROBLEM.replace("end Erdos1", extra)
     two_solved = SOLVED.replace("end Erdos1", extra)
     report = match_submission(two_problem, two_solved)
-    assert MismatchKind.AMBIGUOUS_TARGET.value in kinds(report)
-    # A dataset-convention note, not a submission failure: the submission
-    # itself is fine, so the verdict must not be downgraded by it.
-    assert not report.fatal_mismatches
+    assert report.target.endswith("erdos_1.least_N_3"), report.target
     assert report.status is MatchStatus.MATCHED
+    assert not report.fatal_mismatches
+    # The answer(...) hole identifies the target, so there is nothing to warn
+    # about -- this is the normal layout, not a dataset error.
+    assert MismatchKind.AMBIGUOUS_TARGET.value not in kinds(report)
+
+
+def test_an_unidentifiable_target_refuses_instead_of_guessing():
+    """Two statements and no signal: grading must stop.
+
+    Picking one would produce a confident verdict about a theorem nobody
+    asked for, which is worse than refusing.
+    """
+    stripped = PROBLEM.replace("@[category research open, AMS 5 11]\n", "").replace(
+        "answer(sorry)", "(4 : ℕ)"
+    )
+    two = stripped.replace(
+        "end Erdos1", "theorem other (h : 0 < 2) :\n    (1 : ℕ) = 1 := by\n  sorry\n\nend Erdos1"
+    )
+    report = match_submission(two, two)
+    assert report.status is MatchStatus.UNPARSED
+    assert MismatchKind.AMBIGUOUS_TARGET.value in kinds(report)
+    assert report.fatal_mismatches, "an unidentifiable target must be fatal"
+
+
+def test_a_problem_may_ship_variable_bindings_and_a_copy_is_not_tampering():
+    """The false positive that screening in isolation produced.
+
+    A problem ships whatever it needs, including `variable` bindings, and the
+    answer is supposed to carry them over. Screening the answer on its own
+    flagged the faithful copy as statement tampering, fatally.
+    """
+    problem = (
+        "import Mathlib\n\nvariable (N : ℕ)\n\n"
+        "theorem t : (0 : ℕ) <= N := by\n  sorry\n"
+    )
+    faithful = problem.replace(":= by\n  sorry", ":= by\n  exact Nat.zero_le N")
+    assert match_submission(problem, faithful).status is MatchStatus.MATCHED
+
+    # ...but adding one of its own is still tampering, and so is swapping it.
+    added = faithful.replace("variable (N : ℕ)", "variable (N : ℕ)\nvariable (h : False)")
+    assert match_submission(problem, added).fatal_mismatches
+    swapped = faithful.replace("variable (N : ℕ)", "variable (h : False)")
+    assert match_submission(problem, swapped).fatal_mismatches
+
+
+def test_an_anonymous_instance_is_vocabulary_and_is_checked():
+    """Nameless declarations used to be dropped by the parser entirely.
+
+    A `DecidablePred` instance is part of what a theorem is stated over, and
+    rewriting it to `fun _ => isTrue trivial` makes `decide` close anything
+    while the statement text is untouched. It is never named in the
+    statement, so "load bearing" cannot be read off the text -- any change
+    to one is therefore fatal.
+    """
+    problem = (
+        "import Mathlib\n\nabbrev Good (n : ℕ) : Prop := 0 < n\n\n"
+        "instance : DecidablePred Good := fun n => Nat.decLt 0 n\n\n"
+        "theorem t : Good 1 := by\n  sorry\n"
+    )
+    faithful = problem.replace(":= by\n  sorry", ":= by\n  decide")
+    assert match_submission(problem, faithful).status is MatchStatus.MATCHED
+
+    gutted = faithful.replace("fun n => Nat.decLt 0 n", "fun _ => isTrue trivial")
+    assert match_submission(problem, gutted).fatal_mismatches, "a gutted instance passed"
+
+    dropped = faithful.replace(
+        "instance : DecidablePred Good := fun n => Nat.decLt 0 n\n\n", ""
+    )
+    assert match_submission(problem, dropped).fatal_mismatches, "a dropped instance passed"
 
 
 def test_naming_the_target_silences_the_ambiguity_note():
@@ -562,3 +633,92 @@ def test_the_probe_drops_unproved_helpers():
     probe = SubmissionMatcher().build_confirmation_source(PROBLEM, smuggled)
     assert probe is not None
     assert "lemma key" not in probe
+
+
+# -- the statement gate ------------------------------------------------
+#
+# Policy: an answer must state the problem's theorem verbatim, modulo the
+# answer(...) holes and whitespace. A provably equivalent restatement is
+# refused. The rule is publishable up front and the judgement is
+# deterministic, which is what a contest needs; the cost is that an honest
+# rephrasing scores zero, and that is accepted.
+
+
+PROBLEM_GATE = "import Mathlib\n\ntheorem t (n : Nat) (h : 0 < n) : n >= 1 := by\n  sorry\n"
+#: Same hypotheses, same content, conclusion written the other way round.
+#: `omega` closes either form, so a prover asked about it would say yes.
+RESTATED = "import Mathlib\n\ntheorem t (n : Nat) (h : 0 < n) : 1 <= n := by\n  omega MOCK_PASS\n"
+
+
+def test_an_equivalent_restatement_is_refused_by_the_text_screen():
+    report = match_submission(PROBLEM_GATE, RESTATED)
+    assert report.status is MatchStatus.MISMATCHED
+    kinds = [m.kind for m in report.mismatches]
+    assert MismatchKind.STATEMENT_CHANGED in kinds
+
+
+def test_the_refusal_tells_the_participant_the_rule():
+    report = match_submission(PROBLEM_GATE, RESTATED)
+    detail = next(
+        m.detail for m in report.mismatches if m.kind is MismatchKind.STATEMENT_CHANGED
+    )
+    assert "verbatim" in detail
+    assert "equivalent rephrasing is still refused" in detail
+
+
+def test_a_prover_is_not_asked_once_the_text_screen_refused():
+    """The gate is one-way.
+
+    The mock backend would confirm this probe -- the body carries MOCK_PASS.
+    It must never be consulted, because statement identity is the rule
+    rather than a hypothesis a prover gets to overturn.
+    """
+    report = SubmissionMatcher(create("mock")).check(PROBLEM_GATE, RESTATED)
+    assert report.proves_the_theorem is None, "a refused answer was confirmed"
+    assert "the prover was not asked" in report.confirmation_detail
+    assert report.verdict == "mismatched"
+
+
+def test_confirm_refuses_directly_too():
+    """The second lock.
+
+    `check` gates this, but a caller reaching for `confirm` on its own must
+    not be able to obtain a confirmation the policy forbids.
+    """
+    matcher = SubmissionMatcher(create("mock"))
+    refused = matcher.match(PROBLEM_GATE, RESTATED)
+    report = matcher.confirm(refused, PROBLEM_GATE, RESTATED)
+    assert report.proves_the_theorem is None
+    assert "gate" in report.confirmation_detail
+
+
+def test_the_verdict_never_reports_a_proof_for_a_refused_answer():
+    # Even if proves_the_theorem were somehow set, the verdict reports the
+    # refusal. Belt and braces, because this string is what a leaderboard
+    # and an appeal both read.
+    import dataclasses
+
+    refused = match_submission(PROBLEM_GATE, RESTATED)
+    tampered = dataclasses.replace(refused, proves_the_theorem=True)
+    assert tampered.verdict == "mismatched"
+
+
+def test_filling_the_hole_and_adding_definitions_is_exactly_what_is_allowed():
+    """The other half of the rule, stated positively.
+
+    The problem ships `by sorry`; the answer replaces it, may fill the
+    answer(...) holes, and may bring its own machinery. None of that is a
+    mismatch.
+    """
+    problem = (
+        "import Mathlib\n\nabbrev Good (n : Nat) : Prop := 0 < n\n\n"
+        "theorem t : IsLeast { n | Good n } answer(sorry) := by\n  sorry\n"
+    )
+    answer = (
+        "import Mathlib\n\nabbrev Good (n : Nat) : Prop := 0 < n\n\n"
+        "lemma helper : (1 : Nat) > 0 := by decide\n\n"
+        "theorem t : IsLeast { n | Good n } answer(1) := by\n  exact helper\n"
+    )
+    report = match_submission(problem, answer)
+    assert report.status is MatchStatus.MATCHED, report.format_text()
+    assert report.answers == ("1",)

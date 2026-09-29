@@ -4,15 +4,27 @@ The input contract: two Lean files, one theorem per problem file. The
 question is **what the answer proves**, not whether it compiles -- a file
 that compiles perfectly can have quietly restated the theorem.
 
-Answered in two stages, and the order matters:
+Answered in two stages, and the first one is a **gate**:
 
 1. **Text screen** (:func:`match_submission`) -- fast, needs no prover.
-   Catches a different theorem, a weakened hypothesis, a gutted
-   definition, an unproved helper, reward hacking.
-2. **Kernel confirmation** (:meth:`SubmissionMatcher.confirm`) -- states
-   the *theorem's* proposition and closes it with the *answer's* proof
-   term. If that typechecks, the answer proves the theorem, whatever the
-   two texts look like. When the stages disagree the kernel wins.
+   The answer must state the problem's theorem *verbatim*, modulo the
+   ``answer(...)`` holes it is supposed to fill and whitespace. It also
+   catches a gutted definition, an unproved helper the proof cites, and
+   reward hacking. **A refusal here ends it**: the prover is not asked.
+2. **Kernel confirmation** (:meth:`SubmissionMatcher.confirm`) -- only for
+   an answer that cleared stage 1. States the *theorem's* proposition and
+   closes it with the *answer's* proof term, over the *theorem's* own
+   definitions. If that typechecks, the answer proves the theorem.
+
+The gate is one-way. The text screen can veto and the prover can veto;
+neither can override the other's veto. In particular **a provably
+equivalent restatement is refused**, not rescued. That is a deliberate
+choice for a contest: the rule is publishable up front ("state the theorem
+exactly as given; fill the holes; add whatever machinery your proof
+needs"), the judgement is deterministic, and there is no adjudicating what
+counts as equivalent. The cost is real and accepted -- an honest answer
+that rephrases the goal scores zero -- and it is the direction that keeps
+a wrong number out of a published result.
 
 Four properties of the format drive the design, and each breaks the naive
 answer:
@@ -37,12 +49,10 @@ answer:
    where the holes are.
 
 So the text comparison is: signatures equal after normalizing away
-``answer(...)`` contents and whitespace, and nothing else. What it cannot
-decide is semantic equivalence -- an answer that restates the goal in a
-provably equivalent but textually different way is flagged. That is the
-deliberate direction, since a flag is reviewable and a missed substitution
-is a wrong number in a paper, and stage 2 exists to settle exactly those
-cases.
+``answer(...)`` contents and whitespace, and nothing else. Semantic
+equivalence is deliberately *not* considered -- see the gate above. Stage 2
+does not exist to settle those cases; it exists to check that a
+textually-correct answer's proof actually closes the goal.
 """
 
 from __future__ import annotations
@@ -54,7 +64,7 @@ from typing import Any, Mapping, Sequence
 import dataclasses
 
 from ..backends.comments import strip_comments
-from ..backends.soundness import HackClass, parse_label, screen_source
+from ..backends.soundness import HackClass, screen_source
 from ..backends.types import StatementTask, Status
 from .lean_file import (
     LeanDeclaration,
@@ -161,6 +171,12 @@ class MismatchKind(str, Enum):
     #: A name is declared more than once in the answer. Lean would reject
     #: the file, and picking one of them would mean judging a decoy.
     DUPLICATE_DECLARATION = "duplicate_declaration"
+    #: The answer dropped a helper statement the problem file shipped. A
+    #: note, not a failure: the conclusion is still compared exactly and
+    #: the proof is still checked, so deleting an unused helper changes
+    #: nothing about what was proved. Reported because it tells the setter a
+    #: participant re-derived something instead of using what was given.
+    SHIPPED_STATEMENT_REMOVED = "shipped_statement_removed"
 
 
 @dataclass(frozen=True)
@@ -236,25 +252,28 @@ class MatchReport:
 
     @property
     def verdict(self) -> str:
-        """The overall answer, with the kernel outranking the text screen.
+        """The overall answer. Either stage can refuse; neither can overrule.
 
-        The two can disagree, and when they do the prover is right:
-
-        * **text mismatched, kernel confirmed** -- the answer restated the
-          goal in a provably equivalent way. Accepted; the text screen was
-          being conservative, which is its job.
-        * **text matched, kernel rejected** -- something subtler is wrong
-          than the text shows. Not accepted.
-        * **kernel not run** -- the text screen is all there is, so the
-          verdict says so rather than implying the proof was checked.
+        * **text refused** -- that is the verdict, and the prover was not
+          asked. An answer that does not state the problem's theorem is not
+          accepted even if it proves something equivalent, because the rule
+          participants were given is textual identity.
+        * **text cleared, kernel refused** -- something subtler is wrong
+          than the text showed. Not accepted.
+        * **text cleared, kernel confirmed** -- accepted.
+        * **text cleared, kernel not run** -- the text screen is all there
+          is, and the verdict says so rather than implying the proof was
+          checked.
         """
+        if not self.status.answers_the_problem:
+            # The gate. Reported before any kernel result, so a confirmation
+            # that should never have been attempted cannot leak into it.
+            return self.status.value
         if self.proves_the_theorem is True:
             return "proves_the_theorem"
         if self.proves_the_theorem is False:
             return "does_not_prove_the_theorem"
-        if self.status is MatchStatus.MATCHED:
-            return "statement_matches_unverified_proof"
-        return self.status.value
+        return "statement_matches_unverified_proof"
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -365,18 +384,45 @@ def match_submission(
 ) -> MatchReport:
     """Compare a submitted Lean file against the problem's Lean file.
 
-    The expected layout is **one problem per file**, so ``target`` is
-    normally left out and the file's single theorem is used. It is still
-    inferred safely when a file carries helper ``abbrev``s alongside the
-    theorem, and a file that turns out to hold several statements is
-    reported rather than silently guessed at -- that is a dataset error,
-    and picking the wrong theorem would make every later verdict meaningless.
-    ``target`` remains available to name one explicitly.
+    One theorem is *asked* per file, but the file may ship whatever the
+    problem needs alongside it -- imports, ``abbrev``s, ``def``s, and proved
+    helper ``lemma``s. So ``target`` is normally left out and inferred, from
+    the ``answer(...)`` hole, the ``@[category research]`` attribute, or
+    being the one statement left unproved.
+
+    If none of those isolates exactly one statement, this **refuses** rather
+    than picking: grading against the wrong statement produces a confident
+    verdict about a theorem nobody asked for. ``target`` remains available
+    to name one explicitly.
     """
     problem = parse_lean_file(problem_source)
     submission = parse_lean_file(submission_source)
 
     target_declaration = _pick_target(problem, target)
+    if target_declaration is None and target is None and len(problem.statements()) > 1:
+        # The file holds several statements and nothing distinguishes the one
+        # being asked. This is the setter's bug, and the only safe response
+        # is to refuse: grading against the wrong statement would report a
+        # confident verdict about a theorem nobody asked for.
+        names = [d.name for d in problem.statements()]
+        return MatchReport(
+            target="?",
+            status=MatchStatus.UNPARSED,
+            mismatches=(
+                Mismatch(
+                    MismatchKind.AMBIGUOUS_TARGET,
+                    "the problem file declares %d statements (%s) and none of them is "
+                    "identifiable as the one being asked -- no answer(...) hole, no "
+                    "@[category research] attribute, and not exactly one left unproved. "
+                    "Grading cannot pick one without guessing, so it refuses. Fix the "
+                    "problem file, or pass an explicit target."
+                    % (len(names), ", ".join(names[:5])),
+                    fatal=True,
+                ),
+            ),
+            problem_declarations=len(problem.declarations),
+            submission_declarations=len(submission.declarations),
+        )
     if target_declaration is None:
         return MatchReport(
             target=target or "?",
@@ -430,12 +476,15 @@ def match_submission(
     # it: if a problem file holds several theorems and no target was named,
     # inference picked one and every verdict below is about that one.
     problem_statements = problem.statements()
-    if target is None and len(problem_statements) > 1:
+    if target is None and len(problem_statements) > 1 and not _isolates_target(problem):
+        # Only when the signals were weak. A problem shipping proved helper
+        # lemmas next to a theorem with an answer(...) hole is the normal
+        # layout, not something to warn about on every single problem.
         mismatches.append(
             Mismatch(
                 MismatchKind.AMBIGUOUS_TARGET,
-                "the theorem file declares %d statements (%s) but the convention is one "
-                "per file; %r was used as the target. Pass an explicit target to be sure."
+                "the theorem file declares %d statements (%s); %r was identified as "
+                "the target. Pass an explicit target to be sure."
                 % (
                     len(problem_statements),
                     ", ".join(d.name for d in problem_statements[:4]),
@@ -483,8 +532,11 @@ def match_submission(
         mismatches.append(
             Mismatch(
                 MismatchKind.STATEMENT_CHANGED,
-                "the answer's statement is not the theorem's statement "
-                "(compared with answer(...) holes and whitespace normalized away)",
+                "the answer's statement is not the theorem's statement. Copy the "
+                "theorem line from the problem file verbatim and change nothing but "
+                "the answer(...) holes and the proof. An equivalent rephrasing is "
+                "still refused -- compared with holes, whitespace and comments "
+                "normalized away, everything else must match exactly",
                 expected=expected,
                 actual=actual,
             )
@@ -555,6 +607,24 @@ def match_submission(
             )
         )
 
+    dropped = (
+        {d.name for d in problem_statements}
+        - {d.name for d in submission.statements()}
+        - {name}
+    )
+    if dropped:
+        mismatches.append(
+            Mismatch(
+                MismatchKind.SHIPPED_STATEMENT_REMOVED,
+                "the answer dropped %d statement(s) the problem file shipped (%s). Not "
+                "a failure -- the theorem proved is still compared exactly -- but the "
+                "problem provided them, so check whether the participant re-derived "
+                "something or misread what was given"
+                % (len(dropped), ", ".join(sorted(dropped)[:4])),
+                fatal=False,
+            )
+        )
+
     extra = {d.name for d in submission.statements()} - {d.name for d in problem_statements}
     if extra:
         # Worth surfacing without penalising: a submission may factor its
@@ -573,7 +643,7 @@ def match_submission(
         )
 
     if check_reward_hacking:
-        mismatches.extend(_screen_submission(submission, submitted))
+        mismatches.extend(_screen_submission(submission, submitted, problem_source))
 
     status = _decide(mismatches, submitted)
     return MatchReport(
@@ -597,17 +667,52 @@ def _with_confirmation(
     )
 
 
+def _isolates_target(problem: LeanFile) -> bool:
+    """Whether an answer(...) hole alone identifies the target.
+
+    The strongest of the three signals, and the one that means the setter
+    wrote the file the way this format expects. When it holds there is
+    nothing to warn about.
+    """
+    return len([d for d in problem.statements() if d.answer_holes]) == 1
+
+
 def _pick_target(problem: LeanFile, target: str | None) -> LeanDeclaration | None:
-    by_name = problem.by_name()
+    """Which statement in the problem file is the one to be answered?
+
+    A named ``target`` always wins. Otherwise: one statement is the easy
+    case, and several is the normal case for this format -- a problem
+    legitimately ships proved helper lemmas next to the theorem it asks
+    for. Three signals are tried, each definitional for that layout:
+
+    1. an ``answer(...)`` hole. Only the theorem being asked has one.
+    2. ``@[category research ...]``, which is how formal-conjectures marks
+       the conjecture itself.
+    3. being unproved. The problem ships ``by sorry`` for the target and
+       real proofs for its helpers.
+
+    If none of them isolates exactly one statement, this returns ``None``
+    and the caller refuses. It used to fall back to ``statements[0]``,
+    which in this layout is the first *helper* -- so an answer that copied
+    that helper verbatim was reported as matching while the actual theorem
+    went unexamined. Guessing here makes every later verdict meaningless,
+    so the answer is to stop.
+    """
     if target:
-        return by_name.get(target)
+        return problem.by_name().get(target)
     statements = problem.statements()
     if not statements:
         return None
-    for declaration in statements:
-        if "research" in declaration.categories:
-            return declaration
-    return statements[0]
+    if len(statements) == 1:
+        return statements[0]
+    for candidates in (
+        [d for d in statements if d.answer_holes],
+        [d for d in statements if "research" in d.categories],
+        [d for d in statements if d.is_unproved],
+    ):
+        if len(candidates) == 1:
+            return candidates[0]
+    return None
 
 
 def _definition_text(declaration: LeanDeclaration) -> str:
@@ -621,6 +726,57 @@ def _definition_text(declaration: LeanDeclaration) -> str:
     return normalize_signature(declaration.signature + " := " + declaration.body)
 
 
+def _diff_anonymous(
+    problem: LeanFile, submission: LeanFile
+) -> tuple[DefinitionDiff, ...]:
+    """Diff the definitions that have no name to be keyed on.
+
+    An anonymous ``instance`` has only its text as identity, so the two
+    files' instances are compared as multisets. Any difference is fatal:
+    unlike a named definition, there is no way to read off the statement
+    whether an instance participates, because typeclass resolution is
+    implicit. A ``DecidablePred`` instance replaced by
+    ``fun _ => isTrue trivial`` makes ``decide`` close anything while the
+    statement text is untouched, so "not mentioned" must not mean "harmless".
+    """
+    from collections import Counter
+
+    theirs = Counter(_definition_text(d) for d in submission.anonymous_definitions())
+    ours = Counter(_definition_text(d) for d in problem.anonymous_definitions())
+    if theirs == ours:
+        return ()
+
+    out: list[DefinitionDiff] = []
+    kind = next(
+        (d.kind for d in problem.anonymous_definitions() or submission.anonymous_definitions()),
+        "instance",
+    )
+    for text, count in ours.items():
+        if theirs[text] < count:
+            out.append(
+                DefinitionDiff(
+                    "(anonymous %s)" % kind,
+                    DefinitionStatus.MISSING,
+                    kind,
+                    load_bearing=True,
+                    expected=text,
+                )
+            )
+    for text, count in theirs.items():
+        if ours[text] < count:
+            out.append(
+                DefinitionDiff(
+                    "(anonymous %s -- put a proof-local one in `haveI`/`letI` instead)"
+                    % kind,
+                    DefinitionStatus.CHANGED if ours else DefinitionStatus.ADDED,
+                    kind,
+                    load_bearing=True,
+                    actual=text,
+                )
+            )
+    return tuple(out)
+
+
 def diff_definitions(
     problem: LeanFile, submission: LeanFile, target: LeanDeclaration | None = None
 ) -> tuple[DefinitionDiff, ...]:
@@ -630,14 +786,18 @@ def diff_definitions(
     That distinction matters for severity: changing a definition the
     statement names changes the claim, while changing an unrelated helper
     only affects whether the proof works.
+
+    Nameless definitions -- an anonymous ``instance`` -- are diffed
+    separately, by text, and always count as load-bearing. See
+    :func:`_diff_anonymous`.
     """
-    problem_definitions = {d.name: d for d in problem.definitions()}
-    answer_definitions = {d.name: d for d in submission.definitions()}
+    problem_definitions = {d.name: d for d in problem.definitions() if d.name}
+    answer_definitions = {d.name: d for d in submission.definitions() if d.name}
     used = (
         _dependency_names(target, problem_definitions) if target is not None else set()
     )
 
-    out: list[DefinitionDiff] = []
+    out: list[DefinitionDiff] = list(_diff_anonymous(problem, submission))
     for name in sorted(problem_definitions):
         original = problem_definitions[name]
         resubmitted = answer_definitions.get(name)
@@ -746,7 +906,7 @@ def _introduces_syntax(parsed: LeanFile) -> bool:
 
 
 def _screen_submission(
-    submission: LeanFile, target: LeanDeclaration
+    submission: LeanFile, target: LeanDeclaration, problem_source: str = ""
 ) -> list[Mismatch]:
     """Screen the answer for reward hacking, at the right scope for each class.
 
@@ -765,19 +925,44 @@ def _screen_submission(
       is the target itself being unproved, which is an honest non-answer
       already reported as ``PROOF_MISSING`` -- calling that reward hacking
       would turn "did not solve it" into "cheated".
+    * **The problem file is the baseline.** A problem ships imports, an
+      ``open``, sometimes a ``set_option`` or a ``variable`` binding, and
+      the answer is supposed to carry all of it over. Screening the answer
+      in isolation flagged it for what the problem provided -- a faithful
+      copy of a problem with ``variable (N : Nat)`` was refused as
+      tampering. Only what the answer *added* counts.
     """
     out: list[Mismatch] = []
 
-    file_level = screen_source(
-        submission.source, "lean4", required_statement=None, allowed_imports=None
+    # Two screens, because the baseline applies to one and not the other.
+    #
+    # Structural constructs -- imports, `open`, `set_option`, `variable` --
+    # are screened *against the problem file*, so an answer is not punished
+    # for carrying over what the problem provided.
+    #
+    # Placeholders are screened against nothing. The problem file always
+    # contains `sorry`: that is the hole the answer is supposed to fill.
+    # Treating it as inherited would let an answer leave it in place and
+    # come back `matched`, which is the one failure this tool exists to
+    # prevent.
+    structural = screen_source(
+        submission.source,
+        "lean4",
+        required_statement=None,
+        allowed_imports=None,
+        classes=[c for c in HackClass if c is not HackClass.PLACEHOLDER],
+        baseline=problem_source or None,
     )
-    non_placeholder = [
-        violation
-        for violation in file_level.violations
-        if parse_label(violation)[0] != HackClass.PLACEHOLDER.value
-    ]
-    if non_placeholder:
-        out.append(Mismatch(MismatchKind.REWARD_HACKING, "; ".join(non_placeholder)))
+    if structural.violations:
+        out.append(Mismatch(MismatchKind.REWARD_HACKING, "; ".join(structural.violations)))
+
+    file_level = screen_source(
+        submission.source,
+        "lean4",
+        required_statement=None,
+        allowed_imports=None,
+        classes=[HackClass.PLACEHOLDER],
+    )
 
     if target.is_unproved:
         return out
@@ -808,11 +993,7 @@ def _screen_submission(
             )
         )
 
-    placeholders = [
-        violation
-        for violation in file_level.violations
-        if parse_label(violation)[0] == HackClass.PLACEHOLDER.value
-    ]
+    placeholders = list(file_level.violations)
     if placeholders and not unproved_helpers:
         # A placeholder that is not a whole unproved helper: a `sorry`
         # inside an otherwise-real proof.
@@ -865,8 +1046,21 @@ class SubmissionMatcher:
         target: str | None = None,
         **kw: Any,
     ) -> MatchReport:
-        """Text screen, then kernel confirmation when a prover is available."""
+        """Text screen, then kernel confirmation -- but only past the gate.
+
+        A refusal at stage 1 is final, so the prover is not asked. That
+        saves the compile, and more importantly it keeps the policy
+        single-valued: there is no path by which an answer that restated
+        the theorem gets accepted for proving something equivalent.
+        """
         report = self.match(problem_source, submission_source, target=target, **kw)
+        if not report.status.answers_the_problem:
+            return _with_confirmation(
+                report,
+                None,
+                "the text screen refused this answer, so the prover was not asked; "
+                "an answer must state the problem's theorem verbatim",
+            )
         if self.verifier is None:
             return report
         return self.confirm(report, problem_source, submission_source, target=target)
@@ -884,7 +1078,20 @@ class SubmissionMatcher:
         Never raises, and never upgrades a ``None`` verdict into a claim:
         if the probe cannot be built or the prover cannot run, the report
         comes back with ``proves_the_theorem=None`` and a reason.
+
+        Refuses outright for an answer the text screen rejected. ``check``
+        already gates that, and this is the second lock: a caller that
+        reaches for ``confirm`` directly must not be able to obtain a
+        confirmation the policy does not allow.
         """
+        if not report.status.answers_the_problem:
+            return _with_confirmation(
+                report,
+                None,
+                "not confirmable: the text screen refused this answer (%s), and "
+                "statement identity is a gate rather than something a prover can "
+                "overturn" % report.status.value,
+            )
         if self.verifier is None:
             return _with_confirmation(report, None, "no verifier configured")
 

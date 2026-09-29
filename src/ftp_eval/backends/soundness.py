@@ -52,6 +52,7 @@ Two limits, stated because the value of this module is in being trusted:
 from __future__ import annotations
 
 import re
+from collections import Counter
 from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Iterable, Sequence
@@ -589,6 +590,64 @@ _OPEN_RE = re.compile(r"^\s*(?:local\s+|scoped\s+)?open\s+([^\n]+)", re.MULTILIN
 DEFAULT_ALLOWED_IMPORTS: tuple[str, ...] = ("Mathlib", "Std", "Batteries", "Init", "Lean", "Aesop")
 
 
+def _normalized_matches(pattern: HackPattern, body: str) -> Counter[str]:
+    """What a pattern matched, whitespace-collapsed, **with multiplicity**.
+
+    A multiset rather than a set, because several patterns match only a
+    keyword and its opening bracket -- `lean.variable_injection` matches
+    ``variable (`` and nothing more. Comparing distinct text alone would let
+    an answer that inherits ``variable (N : Nat)`` add
+    ``variable (h : False)`` for free, since both collapse to the same
+    string. Counting catches it: two occurrences where the problem had one.
+
+    Each occurrence is widened to its **whole logical line** -- the match
+    plus any continuation lines, which are the ones starting with
+    whitespace. The bare match is not enough: several patterns capture only
+    a keyword and its opening bracket, so an answer that swapped an
+    inherited ``variable (N : Nat)`` for ``variable (h : False)`` would look
+    unchanged. Widening exposes the content; collapsing whitespace means
+    re-wrapping an inherited line still looks inherited.
+    """
+    return Counter(_logical_line(body, m.start()) for m in pattern.pattern.finditer(body))
+
+
+def _logical_line(body: str, start: int) -> str:
+    """The line at ``start``, with its continuation lines, whitespace collapsed.
+
+    Advances past leading whitespace first. Patterns anchored with
+    ``^\\s*`` start their match on the newline *before* the keyword, so
+    slicing straight from the match start returned the empty line before
+    it -- which made every occurrence compare equal to every other.
+    """
+    while start < len(body) and body[start] in " \t\r\n":
+        start += 1
+    lines = body[start:].split("\n")
+    out = [lines[0]]
+    for line in lines[1:]:
+        if line[:1] in (" ", "\t"):
+            out.append(line)
+        else:
+            break
+    return " ".join(" ".join(out).split())
+
+
+def _introduced(pattern: HackPattern, body: str, baseline_body: str) -> bool:
+    """Whether the subject added something the baseline did not have.
+
+    True if any matched text occurs more often than in the baseline. False
+    means every occurrence is accounted for by the problem file.
+
+    An empty match set cannot happen here -- the caller has confirmed the
+    pattern fires -- but returning True for it keeps the check conservative
+    if a prefilter ever made it possible.
+    """
+    theirs = _normalized_matches(pattern, body)
+    if not theirs:
+        return True
+    inherited = _normalized_matches(pattern, baseline_body)
+    return any(count > inherited[text] for text, count in theirs.items())
+
+
 def screen_source(
     source: str,
     language: str,
@@ -598,6 +657,7 @@ def screen_source(
     allowed_imports: Sequence[str] | None = DEFAULT_ALLOWED_IMPORTS,
     classes: Sequence[HackClass] = PROOF_HACK_CLASSES,
     subject: str = "proof",
+    baseline: str | None = None,
 ) -> SoundnessReport:
     """Screen source text for the ways it can game a checker.
 
@@ -616,8 +676,17 @@ def screen_source(
     ``allowed_imports`` lists module prefixes that may be imported; pass
     ``None`` to skip the check when your setup legitimately imports local
     modules.
+
+    ``baseline`` is source the subject is allowed to have inherited -- the
+    problem file, when screening an answer to it. A pattern that fires on
+    text also present in the baseline is not reported, because the subject
+    did not introduce it. This is what makes it safe for a problem to ship
+    ``variable`` bindings, a ``set_option``, or an ``open``: a faithful copy
+    is not tampering. The comparison is by *matched text*, so inheriting
+    ``variable (N : Nat)`` does not excuse adding ``variable (h : False)``.
     """
     wanted_classes = frozenset(classes)
+    baseline_body = strip_comments(baseline, language) if baseline else ""
     report = SoundnessReport()
     body = strip_comments(source, language)
     # Lowercased once and shared, so the literal prefilter in
@@ -629,10 +698,14 @@ def screen_source(
     for pattern in PATTERNS:
         if pattern.hack_class not in wanted_classes:
             continue
-        if language in pattern.languages and pattern.search(body, lowered):
-            report = report.with_violation(
-                label(pattern.hack_class, pattern.id, pattern.message % subject)
-            )
+        if language not in pattern.languages or not pattern.search(body, lowered):
+            continue
+        if baseline_body and not _introduced(pattern, body, baseline_body):
+            # Present in the problem too, so the answer inherited it.
+            continue
+        report = report.with_violation(
+            label(pattern.hack_class, pattern.id, pattern.message % subject)
+        )
 
     if (
         allowed_imports is not None

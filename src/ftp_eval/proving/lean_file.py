@@ -39,6 +39,9 @@ _DECL_KEYWORDS = (
     "inductive", "class", "axiom", "opaque", "constant", "proof_wanted",
 )
 
+#: Declarations Lean allows to be nameless. Kept rather than skipped.
+_ANONYMOUS_KINDS = ("example", "instance")
+
 _MODIFIERS = (
     "private", "protected", "public", "noncomputable", "unsafe", "partial",
     "nonrec", "local", "scoped", "@[expose]",
@@ -177,12 +180,13 @@ class LeanFile:
         Bare names are also registered as aliases when unambiguous, so a
         caller naming a target without its namespace still finds it.
         """
+        named = [d for d in self.declarations if d.name]
         out: dict[str, LeanDeclaration] = {}
         bare_counts: dict[str, int] = {}
-        for declaration in self.declarations:
+        for declaration in named:
             out[declaration.qualified_name] = declaration
             bare_counts[declaration.name] = bare_counts.get(declaration.name, 0) + 1
-        for declaration in self.declarations:
+        for declaration in named:
             if bare_counts[declaration.name] == 1:
                 out.setdefault(declaration.name, declaration)
         return out
@@ -197,6 +201,10 @@ class LeanFile:
         """
         seen: dict[str, int] = {}
         for declaration in self.declarations:
+            if not declaration.name:
+                # Lean permits several instances for one class, and every
+                # `example` is nameless. Neither is a duplicate declaration.
+                continue
             key = declaration.qualified_name
             seen[key] = seen.get(key, 0) + 1
         return tuple(sorted(name for name, count in seen.items() if count > 1))
@@ -205,7 +213,17 @@ class LeanFile:
         return tuple(d for d in self.declarations if d.is_statement)
 
     def definitions(self) -> tuple[LeanDeclaration, ...]:
+        """Everything that is not a statement: the file's vocabulary.
+
+        Includes anonymous ``instance``s, which carry no name but are very
+        much part of what a theorem is stated over -- a ``DecidablePred``
+        instance is what makes ``decide`` applicable at all.
+        """
         return tuple(d for d in self.declarations if not d.is_statement)
+
+    def anonymous_definitions(self) -> tuple[LeanDeclaration, ...]:
+        """Vocabulary with no name, so it can only be compared by its text."""
+        return tuple(d for d in self.definitions() if not d.name)
 
     def imports(self) -> tuple[str, ...]:
         return tuple(re.findall(r"^\s*(?:public\s+)?import\s+(\S+)", self.preamble, re.MULTILINE))
@@ -436,10 +454,14 @@ def parse_lean_file(source: str) -> LeanFile:
         full_rest = rest + "\n" + tail if tail else rest
 
         name_match = re.match(r"([^\s({\[:⦃]+)", rest.strip())
-        if not name_match and match.group("kind") != "example":
+        if not name_match and match.group("kind") not in _ANONYMOUS_KINDS:
             unparsed.append(source[offset:end][:200])
             continue
-        name = name_match.group(1) if name_match else "example"
+        # `example` and an anonymous `instance` are both legal and both
+        # nameless. Dropping them lost the instance a problem may need in
+        # order to state its theorem at all, and hid an answer that swapped
+        # one for a bogus instance -- which can make `decide` close a goal.
+        name = name_match.group(1) if name_match else ""
         after_name = full_rest[full_rest.find(name) + len(name) :] if name_match else full_rest
 
         signature, body = _split_signature_and_body(after_name)

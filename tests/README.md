@@ -1,6 +1,6 @@
 # Tests
 
-416 tests, no Lean required — everything runs on the `mock` backend.
+425 tests, no Lean required — everything runs on the `mock` backend.
 
 ```bash
 pytest -q                          # all of them
