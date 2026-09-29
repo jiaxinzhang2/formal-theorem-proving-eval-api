@@ -1,2 +1,0 @@
-{"participant": "alice", "problem_id": "P001", "status": "failed", "detail": "the answer's proof does not close the theorem's proposition (mock: no MOCK_* marker found, defaulting to failure)", "compile_time_s": 0.0}
-{"participant": "bob", "problem_id": "P001", "status": "not_run", "detail": "", "compile_time_s": null}

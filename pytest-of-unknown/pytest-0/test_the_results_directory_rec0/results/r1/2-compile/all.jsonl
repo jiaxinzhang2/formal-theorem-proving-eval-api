@@ -1,2 +1,0 @@
-{"participant": "alice", "problem_id": "P001", "status": "not_run", "detail": "no prover configured", "compile_time_s": null}
-{"participant": "bob", "problem_id": "P001", "status": "not_run", "detail": "", "compile_time_s": null}

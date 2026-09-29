@@ -31,3 +31,6 @@ per-task*.jsonl
 .idea/
 .DS_Store
 Thumbs.db
+
+# pytest temp dirs (created when TMPDIR is unset)
+pytest-of-*/
