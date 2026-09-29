@@ -63,8 +63,19 @@ jobs:
             echo 'the demo problems are well formed: the sorry is the hole, not a cheat'
             exit 1
           fi
-          # A problem set without provenance is reported, not silently passed.
-          grep -q "no MathDB id" /tmp/audit.txt
+          # All three demo problems are fully sourced, so there is nothing to
+          # report -- which is what makes the next check meaningful.
+          if grep -q "no MathDB id" /tmp/audit.txt; then
+            echo "the demo problems all record provenance; nothing should be reported"
+            exit 1
+          fi
+
+          # A problem WITHOUT provenance must be reported rather than passed.
+          mkdir -p /tmp/unsourced
+          printf 'theorem P001 : True := by sorry\n' > /tmp/unsourced/P001.lean
+          ftp-eval audit --problems /tmp/unsourced --quiet | tee /tmp/unsourced.txt
+          grep -q "no MathDB id" /tmp/unsourced.txt
+          grep -q "no .prose:. metadata" /tmp/unsourced.txt
 
           # A statement that assumes its own conclusion must still be caught.
           mkdir -p /tmp/bad-problems
