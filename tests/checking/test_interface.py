@@ -129,13 +129,14 @@ def test_an_unproved_solution_is_an_honest_miss_not_a_cheat():
     assert InterfaceFault.REWARD_HACKING.value not in faults(report)
 
 
-def test_a_sorry_in_a_helper_is_not_an_honest_miss():
+def test_a_sorry_in_a_helper_is_an_incomplete_proof():
     report = check_interface(
         problem(), ANSWER.replace("lemma myLemma : Problem.Good 1 := by decide",
                                   "lemma myLemma : Problem.Good 1 := by sorry")
     )
-    assert InterfaceFault.REWARD_HACKING.value in faults(report)
-    assert not report.honest_miss
+    assert InterfaceFault.INCOMPLETE_PROOF.value in faults(report)
+    assert InterfaceFault.REWARD_HACKING.value not in faults(report)
+    assert report.honest_miss and report.incomplete_proof
 
 
 def test_declaring_into_the_problem_namespace_is_refused():

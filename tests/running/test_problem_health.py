@@ -13,6 +13,7 @@ of checking the answers finds it.
 from __future__ import annotations
 
 from ftp_eval import StatementTask, create
+from ftp_eval.backends.types import ProbeKind, Status
 from ftp_eval.proving.running.problem_health import (
     HealthKind,
     check_problem_health,
@@ -135,3 +136,11 @@ def test_a_health_report_round_trips():
     assert restored["problem_id"] == "P001"
     assert restored["ungradeable"] is True
     assert restored["checks"][0]["kind"] == "assumes_nothing"
+
+
+def test_legacy_cheap_proof_is_an_observation_not_a_defect():
+    from ftp_eval.proving.running.problem_health import _trivial
+    observation = _trivial(lambda kind: Status.VERIFIED if kind is ProbeKind.TRIVIAL else None)
+    assert observation.passed is False and observation.informational and not observation.fatal
+    failed_search = _trivial(lambda kind: Status.FAILED)
+    assert failed_search.passed is None

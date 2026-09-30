@@ -117,9 +117,8 @@ class ParticipantResult:
     def flagged(self) -> tuple[GradedAnswer, ...]:
         """Refused for a reason worth a human look.
 
-        "Stated the theorem but did not prove it" is an honest miss and is
-        excluded; everything else -- a changed statement, a gutted
-        definition, reward hacking -- is not.
+        Placeholder-only refusals are excluded. Separate interface or policy
+        violations still require review, including those in incomplete answers.
         """
         return tuple(
             g

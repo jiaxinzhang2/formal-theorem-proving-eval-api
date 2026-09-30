@@ -40,12 +40,14 @@ class InterfaceFault(str, Enum):
     SOLUTION_MISSING = "solution_missing"
     #: ``solution`` is there but left unproved. An honest miss, not a cheat.
     SOLUTION_UNPROVED = "solution_unproved"
+    #: A partial proof or helper contains a placeholder. Never counts as solved.
+    INCOMPLETE_PROOF = "incomplete_proof"
     #: A declaration inside ``namespace Problem``: reopening a sealed module.
     PROBLEM_NAMESPACE_REUSED = "problem_namespace_reused"
     #: Declarations outside ``namespace Submission``, which can collide with
     #: another answer or with the problem.
     DECLARATION_OUTSIDE_NAMESPACE = "declaration_outside_namespace"
-    #: A placeholder, a fresh axiom, or a kernel escape.
+    #: A fresh axiom, kernel escape or other forbidden proof mechanism.
     REWARD_HACKING = "reward_hacking"
     #: An import the benchmark does not allow.
     IMPORT_NOT_ALLOWED = "import_not_allowed"
@@ -104,14 +106,26 @@ class InterfaceReport:
 
     @property
     def honest_miss(self) -> bool:
-        """Right shape, no proof. Not a failure of integrity."""
-        return [f for f, _ in self.faults] == [InterfaceFault.SOLUTION_UNPROVED]
+        """Only incomplete-proof faults; no separate policy violation was found.
+
+        The retained field name does not infer the submitter's intent.
+        """
+        return bool(self.faults) and all(
+            f in (InterfaceFault.SOLUTION_UNPROVED, InterfaceFault.INCOMPLETE_PROOF)
+            for f, _ in self.faults
+        )
+
+    @property
+    def incomplete_proof(self) -> bool:
+        return any(f in (InterfaceFault.SOLUTION_UNPROVED, InterfaceFault.INCOMPLETE_PROOF)
+                   for f, _ in self.faults)
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "problem_id": self.problem_id,
             "ok": self.ok,
             "honest_miss": self.honest_miss,
+            "incomplete_proof": self.incomplete_proof,
             "faults": [{"fault": f.value, "detail": d} for f, d in self.faults],
             "submitted_arguments": list(self.submitted_arguments),
             "helper_count": self.helper_count,

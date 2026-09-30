@@ -98,17 +98,18 @@ vector as a proof continuation:
 homoglyph identifiers | `generic.homoglyph_identifier` |
 `axiom` / `#exit` / `variable` / `run_cmd` appended after the theorem | flagged anyway, though they cannot change the verdict |
 
-What *does* change is whose problem the statement is. A vacuous or
-trivially-true statement in a published problem set is **the setter's bug,
-not the participant's**, so audit the problem folder once rather than
-per answer:
+A vacuous value predicate is a problem-design defect: every candidate satisfies
+it. Audit the problem folder before publication:
 
 ```bash
 ftp-eval audit --problems benchmarks/my-2026/problems -b lean4
 ```
 
 That runs the elaboration, triviality and vacuity probes over every
-problem. Faithfulness is judged only for problems that record a `prose:`
+problem. Cheap proofs are difficulty observations, not evidence of a lost
+formalization. For a construction task, checking supplied gold measures
+verification cost, not the effort of finding an answer. Universal acceptance
+of all values remains a fatal health failure. Faithfulness is judged only for problems that record a `prose:`
 line, and problems without one are reported as unjudged rather than passed:
 with no prose, nothing can say the formalization means the right thing, and
 the report says so instead of implying the structural pass was enough.
@@ -156,7 +157,12 @@ result.soundness.violations    # ("[placeholder:lean.sorry] proof contains `sorr
 ```
 
 In aggregate, the contest report counts each distinct reason under
-`reward hacking seen`, names the specific pattern that fired, and
+`reward hacking seen`, excluding placeholder-only refusals. Bare and partial
+`sorry` proofs, `admit`, helper placeholders and audited `sorryAx` all remain
+unsolved and are classified as incomplete proofs. This classification does not
+infer intent. A new axiom or kernel escape is recorded separately even in an
+incomplete answer. The lower-level verifier still reports its raw soundness
+violations, including placeholders. The report names each remaining pattern, and
 `ftp-eval grade --strict` exits 5. A refused answer counts as not solved —
 it was graded and it did not succeed — so an unsound pass lowers the score
 rather than vanishing from the denominator.

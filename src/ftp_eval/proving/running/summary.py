@@ -191,7 +191,7 @@ def summarize_contest(
             elif failed_at is Stage.AXIOMS:
                 problem.refused_at_axioms += 1
 
-        from ...backends.soundness import parse_label
+        from ...backends.soundness import HackClass, parse_label
 
         violations: list[str] = []
         if answer.report:
@@ -200,8 +200,8 @@ def summarize_contest(
             violations.extend(answer.axiom_audit.violations)
         for detail in violations:
             for violation in detail.split("; "):
-                _, pattern_id = parse_label(violation)
-                if pattern_id:
+                kind, pattern_id = parse_label(violation)
+                if pattern_id and kind != HackClass.PLACEHOLDER.value:
                     hacks[pattern_id] += 1
 
     stats.refused_at = dict(refused)

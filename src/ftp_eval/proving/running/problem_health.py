@@ -12,7 +12,8 @@ Each asks something a model cannot reliably answer, because each is really
     assumes_nothing   does it declare an `axiom`, an `opaque`, or an
                       elaborator setting that weakens the goal?   text only
     elaborates        does the statement typecheck at all?
-    non_trivial       can `trivial` / `simp` / `decide` close it outright?
+    non_trivial       difficulty observation: can cheap tactics close it?
+                      a supplied witness measures verification, not search
     non_vacuous       does the frozen target accept every possible value?
                       (legacy theorems: contradiction in the hypotheses)
     gold_equivalent   is it provably iff a reference statement?
@@ -71,9 +72,9 @@ class HealthKind(str, Enum):
 class HealthCheck:
     """One question's answer.
 
-    ``passed`` is deliberately three-valued. ``None`` means the probe did
-    not run -- no prover, or the backend cannot build that probe for this
-    language -- and must never be read as either verdict. A problem set
+    ``passed`` is deliberately three-valued. ``None`` means no conclusion:
+    a probe did not run or its tactic search was inconclusive. It must never
+    be read as either verdict. A problem set
     reported healthy because nothing was asked is the failure this type
     exists to prevent.
     """
@@ -83,6 +84,8 @@ class HealthCheck:
     detail: str = ""
     #: A failure that makes the problem ungradeable rather than merely odd.
     fatal: bool = False
+    #: An observation about tactic cost, not a defect in the problem.
+    informational: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -90,6 +93,7 @@ class HealthCheck:
             "passed": self.passed,
             "detail": self.detail,
             "fatal": self.fatal,
+            "informational": self.informational,
         }
 
 
@@ -105,7 +109,7 @@ class ProblemHealth:
 
     @property
     def failures(self) -> tuple[HealthCheck, ...]:
-        return tuple(c for c in self.checks if c.passed is False)
+        return tuple(c for c in self.checks if c.passed is False and (c.fatal or not c.informational))
 
     @property
     def ungradeable(self) -> bool:
@@ -158,10 +162,12 @@ class ProblemHealth:
         else:
             mark = "not checked"
         failures = self.failures
+        observations = [c for c in self.checks if c.informational and c.passed is False]
+        details = failures or observations
         return "%s %-16s %s" % (
             mark,
             self.problem_id[:16],
-            failures[0].detail[:76] if failures else "",
+            details[0].detail[:76] if details else "",
         )
 
 
@@ -291,13 +297,7 @@ def _assumes_nothing(task: StatementTask) -> HealthCheck:
 
 
 def _trivial(probe: Any) -> HealthCheck:
-    """A goal a one-liner closes is usually a lost formalization.
-
-    Not always -- some problems really are one ``simp`` away -- so this is
-    reported as suspect rather than fatal. What it reliably catches is the
-    degenerate case: a statement collapsed to ``True``, or to a closed
-    arithmetic identity ``decide`` evaluates.
-    """
+    """Record cheap proof evidence without inferring a formalization defect."""
     outcome = probe(ProbeKind.TRIVIAL)
     if outcome is None:
         return HealthCheck(HealthKind.NON_TRIVIAL, None, "no triviality probe available")
@@ -309,10 +309,11 @@ def _trivial(probe: Any) -> HealthCheck:
         return HealthCheck(
             HealthKind.NON_TRIVIAL,
             False,
-            "a single cheap tactic closes this goal, which usually means the "
-            "formalization lost the content of the problem",
+            "easy proof: a cheap tactic closes this goal; this is a difficulty observation",
+            informational=True,
         )
-    return HealthCheck(HealthKind.NON_TRIVIAL, True, "not closable by a cheap tactic")
+    return HealthCheck(HealthKind.NON_TRIVIAL, None,
+                       "cheap tactics found no proof; difficulty is not established")
 
 
 def _vacuous(probe: Any) -> HealthCheck:
@@ -354,7 +355,6 @@ def _frozen_health(
 ) -> ProblemHealth:
     """Probe the compiled target directly, including universal value acceptance."""
     raw: dict[str, Any] = {}
-    probe_cache: dict[str, tuple[Status | None, Mapping[str, Any]]] = {}
     try:
         problem = read_interface_problem(task.formal_statement, problem_id=task.task_id,
                                          module=module)
@@ -366,10 +366,6 @@ def _frozen_health(
         if verifier is None:
             raw[kind.value] = {"reason": "no prover configured"}
             return None
-        if goal is not None and goal in probe_cache:
-            status, saved = probe_cache[goal]
-            raw[kind.value] = {**saved, "reused_probe": True}
-            return status
         modules = [ModuleSource(module, task.formal_statement, cacheable=True)]
         declaration = ""
         if goal is not None:
@@ -393,8 +389,6 @@ def _frozen_health(
                     build.failed_module == module or build.raw.get("failed_stage") in ("replay", "dependencies")):
                 raw[kind.value]["reason"] = "trusted module or verification infrastructure failed; tactic search was not evaluated"
                 return Status.ERROR
-            if goal is not None:
-                probe_cache[goal] = (build.status, raw[kind.value])
             return build.status
         except Exception as exc:
             raw[kind.value] = {"reason": "module probe failed: %s" % exc, "source": source}
@@ -422,14 +416,29 @@ def _frozen_health(
         if elaboration is not Status.VERIFIED:
             checks.append(HealthCheck(kind, None, "not checked: " + elaboration_detail))
             continue
+        if kind is HealthKind.NON_TRIVIAL and parameters:
+            if not gold:
+                checks.append(HealthCheck(kind, None,
+                                         "no supplied witness; checking difficulty would require searching for a valid value",
+                                         informational=True))
+                continue
+            if len(gold) != len(parameters):
+                checks.append(HealthCheck(kind, None, "gold argument count does not match Target parameters",
+                                         informational=True))
+                continue
         goal = universal
         if kind is HealthKind.NON_TRIVIAL and gold and len(gold) == len(parameters):
             goal = "@Problem.Target " + " ".join("(%s)" % value for value in gold)
         outcome = run(kind, goal)
         if outcome is Status.VERIFIED:
-            detail = ("every target value is accepted: a proof of " + universal
-                      if kind is HealthKind.NON_VACUOUS else "cheap tactics prove the target")
-            checks.append(HealthCheck(kind, False, detail, fatal=kind is HealthKind.NON_VACUOUS))
+            if kind is HealthKind.NON_VACUOUS:
+                detail = "every target value is accepted: a proof of " + universal
+            elif parameters:
+                detail = "cheap tactics verify the supplied gold witness; finding a witness was not tested"
+            else:
+                detail = "easy proof: cheap tactics prove the target; this is a difficulty observation"
+            checks.append(HealthCheck(kind, False, detail, fatal=kind is HealthKind.NON_VACUOUS,
+                                      informational=kind is HealthKind.NON_TRIVIAL))
         else:
             reason = raw.get(kind.value, {}).get("reason")
             checks.append(HealthCheck(kind, None, str(reason or
@@ -504,6 +513,11 @@ def format_health_summary(results: Sequence[ProblemHealth]) -> str:
             "  suspect (%d): %s"
             % (len(suspect), ", ".join(r.problem_id for r in suspect[:10]))
         )
+    observed = [(result.problem_id, check.detail) for result in results for check in result.checks
+                if check.informational and check.passed is False]
+    if observed:
+        lines.append("  difficulty observations (%d):" % len(observed))
+        lines.extend("    %s: %s" % (problem_id, detail) for problem_id, detail in observed[:10])
     if unprobed:
         lines.append(
             "  NOT CHECKED (%d): no prover probe ran for these, so nothing here is "

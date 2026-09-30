@@ -47,6 +47,15 @@ dependency audit in `axioms.ok` / `axioms.violations`. The kernel result is unde
 count refusal stages and specific attack patterns in `refused_at` and
 `hack_patterns`.
 
+Placeholder-only answers are incomplete proofs, not reward-hacking counts.
+The interface retains `solution_unproved` for a bare `sorry` and uses
+`incomplete_proof` for partial proofs and helper placeholders. Both set
+`interface.incomplete_proof=true`; their failure mode is `placeholder_left`.
+An audited `sorryAx` is classified the same way and still refuses the answer.
+Separate new-axiom or kernel-bypass violations remain in `hack_patterns`, even
+when the answer is also incomplete. A missing axiom listing is an infrastructure
+failure, never a successful proof.
+
 The lower-level `Verifier.verify` API instead returns `soundness.ok` and
 `soundness.violations`; these are different result shapes. See
 [soundness policy](soundness.md). A kernel exit code alone is insufficient:
@@ -64,9 +73,18 @@ reported separately because they have different fixes. Both come from
 |---|---|
 `assumes_nothing` | **Text only**, so it runs with no prover: the problem declares no `axiom` / `opaque` / `constant`, and sets no elaborator option that weakens the goal |
 `elaborates` | Prover: statement + placeholder body typechecks |
-`non_trivial` | A successful cheap proof marks the target suspect; failed search is inconclusive |
+`non_trivial` | Informational tactic-cost observation: a cheap proof or verification of supplied gold; failed search is inconclusive |
 `non_vacuous` | A proof of `∀ values, Problem.Target values` marks a value problem ungradeable; failed search is inconclusive |
 `gold_equivalent` | Prover: `candidate ↔ reference` |
+
+`non_trivial` is a retained field name, not a health gate. Its successful cheap
+proof observation has `passed=false, informational=true` and is excluded from
+`failures` / `suspect`. For construction tasks it verifies the supplied gold
+instance, without measuring how hard it is to find a witness. Without gold,
+this difficulty probe does not run. The separate universal value-acceptance
+probe still marks a construction problem `ungradeable` when it proves every
+value is accepted. An `easy proof` observation alone does not establish a
+formalization defect.
 
 `ungradeable` is set by a fatal failure — a statement that does not
 typecheck, or one that is vacuously true. Those are the two cases where no

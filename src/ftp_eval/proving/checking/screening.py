@@ -211,26 +211,26 @@ def _namespace_faults(parsed: LeanFile) -> list[tuple[InterfaceFault, str]]:
 def _screen(answer_source: str, solution: Any) -> list[tuple[InterfaceFault, str]]:
     """The static screen, at file scope.
 
-    File scope because a proof can cite anything in the file: an ``axiom``
-    declared beside the solution is as good as one inside it. The one
-    exception is the solution itself being unproved, already reported as an
-    honest miss -- calling that reward hacking would turn "did not solve it"
-    into "cheated".
+    File scope because a proof can cite anything in the file. Placeholders
+    in partial proofs and helpers are incomplete proofs, independently of
+    new axioms or kernel escapes. Every such fault still refuses the answer.
     """
     report = screen_source(
         answer_source, "lean4", required_statement=None, allowed_imports=None,
         classes=ANSWER_HACK_CLASSES,
     )
-    violations = list(report.violations)
-    if solution is not None and solution.is_unproved:
-        violations = [
-            v
-            for v in violations
-            if parse_label(v)[0] != HackClass.PLACEHOLDER.value
-        ]
-    if not violations:
-        return []
-    return [(InterfaceFault.REWARD_HACKING, "; ".join(violations))]
+    placeholders = [v for v in report.violations
+                    if parse_label(v)[0] == HackClass.PLACEHOLDER.value]
+    violations = [v for v in report.violations
+                  if parse_label(v)[0] != HackClass.PLACEHOLDER.value]
+    faults = []
+    # Preserve the established bare-sorry fault; partial and helper holes
+    # use the new name. Both belong to InterfaceReport.incomplete_proof.
+    if placeholders and not (solution is not None and solution.is_unproved):
+        faults.append((InterfaceFault.INCOMPLETE_PROOF, "; ".join(placeholders)))
+    if violations:
+        faults.append((InterfaceFault.REWARD_HACKING, "; ".join(violations)))
+    return faults
 
 
 def _extension_faults(source: str) -> list[tuple[InterfaceFault, str]]:
