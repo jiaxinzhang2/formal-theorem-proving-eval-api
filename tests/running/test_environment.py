@@ -37,3 +37,32 @@ def test_strict_environment_checks_all_pins_exactly():
                "image_digest": "sha256:" + "e" * 64}
     errors = validate_environment(manifest, changed)
     assert len(errors) == 3
+
+
+# -- what a score is worth ---------------------------------------------
+
+
+def test_the_run_records_what_contained_the_answers():
+    """A number produced without a sandbox is still a number; it means
+    something different, and the difference has to travel with it."""
+    from ftp_eval.backends.lean4 import Lean4Verifier
+    from ftp_eval.backends.lean4_docker import Lean4DockerVerifier
+    from ftp_eval.proving.running.environment import observed_toolchain
+
+    native = observed_toolchain(Lean4Verifier(project_dir=None))
+    assert (native["sandbox"], native["safe"]) == ("none", "none")
+
+    container = Lean4DockerVerifier(image="", workspace=None)
+    assert (container.sandbox, container.safe) == ("read-only-linux-container", "adversarial")
+
+
+def test_an_unknown_backend_is_recorded_as_unsafe_rather_than_unstated():
+    from ftp_eval.proving.running.environment import observed_toolchain
+
+    class Bare:
+        def info(self):
+            from ftp_eval.backends.types import BackendInfo
+            return BackendInfo("bare", "lean4", True)
+
+    observed = observed_toolchain(Bare())
+    assert (observed["sandbox"], observed["safe"]) == ("none", "none")

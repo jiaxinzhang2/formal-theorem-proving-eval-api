@@ -22,9 +22,10 @@ import shutil
 import subprocess
 import tempfile
 import time
-from dataclasses import dataclass
+from contextlib import contextmanager
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Iterable, Mapping, Sequence
+from typing import Any, Callable, Iterable, Iterator, Mapping, Sequence
 
 from .types import (
     ModuleBuild,
@@ -118,7 +119,7 @@ def parse_lean_theorem(statement: str) -> LeanTheorem | None:
     Refusing beats guessing here: a mis-parsed statement produces a probe
     that tests the wrong proposition and reports a confident wrong answer.
     """
-    text = strip_lean_comments(statement).strip()
+    text = strip_comments(statement, "lean4").strip()
     if not text:
         return None
 
@@ -171,12 +172,6 @@ def _find_seam(text: str) -> int:
     return -1
 
 
-def strip_lean_comments(text: str) -> str:
-    """Remove Lean block and line comments."""
-    out = re.sub(r"/-(?:.|\n)*?-/", " ", text)
-    return re.sub(r"--[^\n]*", " ", out)
-
-
 def _normalize_binders(binders: str) -> str:
     """Whitespace-insensitive form, for comparing two binder lists."""
     return re.sub(r"\s+", " ", binders.strip())
@@ -190,6 +185,93 @@ _TRIVIAL_TACTICS = ("trivial", "rfl", "simp", "decide", "norm_num", "omega", "ta
 
 #: Tactics tried when asking "are these hypotheses contradictory?".
 _VACUITY_TACTICS = ("omega", "simp_all", "exact absurd rfl (by decide)", "linarith", "tauto")
+
+
+def _artifact_digest(path: Path) -> str:
+    """SHA-256 of one compiled artifact, read in bounded chunks."""
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1 << 20), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+@dataclass
+class _StagedArtifacts:
+    """What the grader put on an answer's search path, and whether it still is.
+
+    Lean imports an ``.olean`` without rechecking it against the source it
+    was built from, and kernel replay does not help: a forged module is
+    internally consistent, it is simply a different problem. An answer that
+    can run code while it elaborates -- `#eval` and `initialize` are
+    screened, but the screen is syntactic and conservative -- can rewrite
+    these files between its own compile and the generated check, and a
+    swapped ``Problem.olean`` makes the frozen target say whatever the
+    answer wants.
+
+    So the expected digests live here, in the grader's own memory, and the
+    files are re-read before anything else compiles against them.
+    Detection, not prevention: on a native backend the answer's Lean
+    process runs as the grading user, so no file permission is a boundary.
+    See :attr:`Lean4Verifier.sandbox`.
+    """
+
+    directory: Path
+    digests: dict[Path, str] = field(default_factory=dict)
+
+    def record(self, path: Path) -> None:
+        self.digests[path] = _artifact_digest(path)
+
+    def copy_in(self, olean: Path, module: ModuleSource) -> None:
+        """Place a trusted module's artifact on the search path."""
+        destination = self.directory / Path(*module.path_parts).with_suffix(".olean")
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(olean, destination)
+        self.record(destination)
+
+    def breach(self) -> str:
+        """What changed since it was written, or ``""`` when nothing did."""
+        for path, digest in self.digests.items():
+            if not path.is_file():
+                return "%s disappeared" % path.name
+            if _artifact_digest(path) != digest:
+                return "%s was replaced" % path.name
+        # An answer can also *add* a module, shadowing a library one: the
+        # staged directory comes first on LEAN_PATH.
+        extra = next((p for p in self.directory.rglob("*.olean") if p not in self.digests), None)
+        return "%s was added" % extra.name if extra is not None else ""
+
+
+def _tampering(detail: str, when: str) -> ModuleBuild:
+    return ModuleBuild(
+        Status.FAILED,
+        error_kind=ErrorKind.SOUNDNESS,
+        diagnostics=(Diagnostic(
+            Severity.ERROR,
+            "compiled module artifact tampering: %s %s, so nothing checked "
+            "against it is evidence of anything" % (detail, when),
+            kind=ErrorKind.SOUNDNESS,
+        ),),
+    )
+
+
+def lean_library_prefixes(configuration: str) -> set[str]:
+    """Library names a Lake configuration declares, from either syntax.
+
+    Both forms are read from whatever text is handed over, because the
+    two backends get it from different places -- the native one reads the
+    project's files, the container one `cat`s whichever file the image
+    has -- and the shapes are disjoint enough that trying both costs
+    nothing. A generated module may not reuse one of these names: it
+    would be resolved to the project's own library rather than to the
+    staged copy.
+    """
+    prefixes = set(re.findall(r"\blean_lib\s+([A-Za-z_][A-Za-z0-9_]*)", configuration))
+    for block in re.split(r"(?m)^\s*\[\[lean_lib\]\]\s*", configuration)[1:]:
+        match = re.search(r'(?m)^\s*name\s*=\s*"([^".]+)', re.split(r"(?m)^\s*\[", block)[0])
+        if match:
+            prefixes.add(match.group(1))
+    return prefixes
 
 
 class Lean4Verifier(Verifier):
@@ -212,6 +294,16 @@ class Lean4Verifier(Verifier):
     #: Separate processes and separate temp files, so parallel is safe;
     #: Lake's own build lock is the reason the project must be pre-built.
     thread_safe = True
+    #: `lake env lean` as the grading user, with that user's filesystem
+    #: and network. Build directories are per-answer, which keeps two
+    #: answers apart; it does not keep an answer away from the grader.
+    sandbox = "none"
+    #: Tampering with the staged modules is detected by digest, and the
+    #: source screen refuses the commands that run code at elaboration
+    #: time. Neither is a boundary: the answer's Lean process could edit
+    #: this package, the Lean toolchain or the run records instead. Use
+    #: `lean4-docker` to grade answers you did not write.
+    safe = "none"
 
     def __init__(
         self,
@@ -485,6 +577,21 @@ class Lean4Verifier(Verifier):
         search: list[Path] = [staged]
         reused = False
 
+        artifacts = _StagedArtifacts(staged)
+
+        #: What each untrusted module actually imports, read by Lean's own
+        #: parser rather than by a regex over the text. The screen reads
+        #: `import` lines, and the text a regex reads and the text Lean
+        #: compiles can be made to differ; this is the observation a policy
+        #: can be enforced against. `None` means it could not be answered.
+        imports: dict[str, list[str] | None] = {}
+        roots: tuple[str, ...] | None = None
+        prelude: tuple[str, ...] = ()
+
+        def breached(when: str) -> ModuleBuild | None:
+            detail = artifacts.breach()
+            return _tampering(detail, when) if detail else None
+
         def emit(stage: str, status: str, result: ModuleBuild | None = None) -> None:
             if on_stage is not None:
                 on_stage(stage, {"status": status, "payload": result.to_dict() if result else None})
@@ -492,7 +599,8 @@ class Lean4Verifier(Verifier):
         def finish(outcome: ModuleBuild, stage: str = "") -> ModuleBuild:
             outcome.compile_time_s = time.monotonic() - started
             outcome.reused_cache = reused
-            outcome.raw = {**outcome.raw, "failed_stage": stage, "module_sources": {
+            outcome.raw = {**outcome.raw, "failed_stage": stage, "module_imports": dict(imports),
+                           "module_sources": {
                 m.module: self._with_options(m.source) for m in modules
             }}
             return outcome
@@ -513,30 +621,52 @@ class Lean4Verifier(Verifier):
                     digest = hashlib.sha256(json.dumps(cache_key, sort_keys=True).encode("utf-8")).hexdigest()[:24]
                     home = cache_root / digest
                     olean = home / Path(*module.path_parts).with_suffix(".olean")
-                    if olean.exists():
+                    if olean.exists() and self._cached_artifact_intact(olean):
                         # Keyed by content, so a hit is the same source, not
-                        # merely the same name.
+                        # merely the same name -- and the artifact still
+                        # hashes to what we wrote, so the key describes it.
                         reused = True
-                        destination = staged / Path(*module.path_parts).with_suffix(".olean")
-                        destination.parent.mkdir(parents=True, exist_ok=True)
-                        shutil.copyfile(olean, destination)
+                        artifacts.copy_in(olean, module)
                         continue
                 else:
                     # Later source files are never written into a directory
                     # previously writable by an untrusted compilation.
                     home = staged
 
+                if not module.cacheable:
+                    # Staged before the compile, so the import listing is
+                    # read off the same bytes the compile will see.
+                    source_path = home / Path(*module.path_parts).with_suffix(".lean")
+                    source_path.parent.mkdir(parents=True, exist_ok=True)
+                    source_path.write_text(self._with_options(module.source),
+                                           encoding="utf-8", newline="\n")
+                    if roots is None:
+                        roots = self._search_roots(staged, search, timeout_s)
+                        prelude = self._prelude_dependencies(staged, search, timeout_s)
+                    seen = self.observed_imports(source_path, search, roots, prelude, timeout_s)
+                    imports[module.module] = None if seen is None else list(seen)
+
+                breach = breached("before building %s" % module.module)
+                if breach is not None:
+                    emit("kernel", "failed", breach)
+                    return finish(breach, "artifacts")
+
                 outcome = self._build_one(module, home, search if home == staged else [*search, home], timeout_s)
                 if outcome is not None:
                     emit("kernel", "not_run" if outcome.status is Status.ERROR else "failed", outcome)
                     return finish(outcome, "kernel")
+                olean = home / Path(*module.path_parts).with_suffix(".olean")
                 if home != staged:
-                    olean = home / Path(*module.path_parts).with_suffix(".olean")
                     if olean.exists():
-                        destination = staged / Path(*module.path_parts).with_suffix(".olean")
-                        destination.parent.mkdir(parents=True, exist_ok=True)
-                        shutil.copyfile(olean, destination)
+                        self._sidecar(olean).write_text(_artifact_digest(olean), encoding="utf-8")
+                        artifacts.copy_in(olean, module)
+                elif olean.exists():
+                    artifacts.record(olean)
 
+            breach = breached("after the last module compiled")
+            if breach is not None:
+                emit("kernel", "failed", breach)
+                return finish(breach, "artifacts")
             emit("kernel", "passed", ModuleBuild(Status.VERIFIED))
             replay = None
             if self.recheck and audit_declaration:
@@ -557,6 +687,15 @@ class Lean4Verifier(Verifier):
                 modules[-1], home,
                 search, audit_declaration, timeout_s,
             )
+            # The audit is a fresh `lean` process over the generated check
+            # module, which imports the answer's `.olean`. Lean runs an
+            # imported module's `initialize` blocks, so that import is the
+            # last moment answer-supplied code can execute -- check again
+            # before reading the listing it printed.
+            breach = breached("while the dependency listing was produced")
+            if breach is not None:
+                emit("dependencies", "failed", breach)
+                return finish(breach, "artifacts")
             if audited.verified and audited.axioms is None and audit_declaration:
                 audited.status = Status.ERROR
                 audited.diagnostics += (Diagnostic(Severity.ERROR, "axiom dependency listing missing"),)
@@ -592,17 +731,10 @@ class Lean4Verifier(Verifier):
         if self.project_dir is None:
             return set()
         prefixes: set[str] = set()
-        toml = self.project_dir / "lakefile.toml"
-        lean = self.project_dir / "lakefile.lean"
-        if toml.exists():
-            text = toml.read_text(encoding="utf-8")
-            for block in re.split(r"(?m)^\s*\[\[lean_lib\]\]\s*", text)[1:]:
-                block = re.split(r"(?m)^\s*\[", block)[0]
-                match = re.search(r'(?m)^\s*name\s*=\s*"([^".]+)', block)
-                if match:
-                    prefixes.add(match.group(1))
-        if lean.exists():
-            prefixes.update(re.findall(r"\blean_lib\s+([A-Za-z_][A-Za-z0-9_]*)", lean.read_text(encoding="utf-8")))
+        for name in ("lakefile.toml", "lakefile.lean"):
+            path = self.project_dir / name
+            if path.exists():
+                prefixes |= lean_library_prefixes(path.read_text(encoding="utf-8"))
         return prefixes
 
     def preflight_modules(self, modules: Sequence[ModuleSource]) -> None:
@@ -651,6 +783,139 @@ class Lean4Verifier(Verifier):
         finally:
             shutil.rmtree(probe_root, ignore_errors=True)
         return self._module_capabilities[module_prefix]
+
+    #: Module prefix for the probe that makes Lean print its search path.
+    _PROBE = "FtpEvalSearchPathProbe"
+
+    @contextmanager
+    def _probe(self, home: Path, suffix: str, source: str) -> Iterator[Path]:
+        """A throwaway module beside the staged ones, removed afterwards.
+
+        It has to live on the search path rather than in a temp directory:
+        `lake env lean` refuses an input outside the project root, and the
+        answers for both probes depend on the search path being the one
+        the real compile will use.
+        """
+        path = home / (self._PROBE + suffix + ".lean")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(source, encoding="utf-8", newline="\n")
+        try:
+            yield path
+        finally:
+            path.unlink(missing_ok=True)
+
+    def _search_roots(self, home: Path, search: Sequence[Path], timeout_s: float) -> tuple[str, ...]:
+        """Every directory Lean resolves imports against, asked of Lean.
+
+        An import that cannot resolve makes Lean print its own search path,
+        and that is the only list guaranteed to be the one the real imports
+        used. Lake's build layout has moved between releases -- on 4.29 it
+        is `.lake/build/lib/lean`, with a segment that was not there before
+        -- so deriving it from the project directory would be a guess that
+        fails quietly, in the direction of calling a module unnameable.
+        """
+        with self._probe(home, "", "import %s.Missing\n" % self._PROBE) as probe:
+            proc = self._run_lean(["--deps", str(probe)], search, timeout_s)
+        if proc is None:
+            return ()
+        _, found, tail = ("%s\n%s" % (proc.stdout or "", proc.stderr or "")).partition(
+            "search path entries:")
+        if not found:
+            return ()
+        roots: list[str] = []
+        for line in tail.splitlines():
+            entry = line.strip()
+            if not entry:
+                if roots:
+                    break
+                continue
+            roots.append(entry)
+        return tuple(roots)
+
+    def _dependencies(self, path: Path, search: Sequence[Path], timeout_s: float) -> tuple[str, ...] | None:
+        """Olean paths this source file imports, read by Lean's own parser.
+
+        ``None`` when the question could not be answered, which upstream
+        must not read as "it imports nothing". Direct imports only, which
+        is what an allowlist is about.
+        """
+        proc = self._run_lean(["--deps", str(path)], search, timeout_s)
+        if proc is None or proc.returncode != 0:
+            return None
+        return tuple(line.strip() for line in (proc.stdout or "").splitlines() if line.strip())
+
+    @staticmethod
+    def _module_name(dependency: str, roots: Sequence[str]) -> str:
+        """The module name an olean path stands for, given the search path.
+
+        A path under no known root comes back marked rather than guessed
+        at: an unnameable import is one an allowlist cannot clear, and
+        that is the direction a missing root should fail in.
+        """
+        target = os.path.normpath(dependency)
+        # Case folding is for *comparing* paths, never for the name: a
+        # Windows root arrives as `e:\...` where the dependency says
+        # `E:\...`, and a lowercased `Lean` would quietly stop matching
+        # the allowlist it is supposed to be checked against.
+        folded = os.path.normcase(target)
+        if len(folded) != len(target):
+            return "?" + dependency
+        best = ""
+        for root in roots:
+            prefix = os.path.normcase(os.path.normpath(root))
+            if folded.startswith(prefix + os.sep) and len(prefix) > len(best):
+                best = prefix
+        if not best:
+            return "?" + dependency
+        relative = target[len(best) + 1:]
+        stem = relative[: -len(".olean")] if relative.endswith(".olean") else relative
+        return stem.replace(os.sep, ".").replace("/", ".")
+
+    def _prelude_dependencies(self, home: Path, search: Sequence[Path], timeout_s: float) -> tuple[str, ...]:
+        """What Lean imports on its own, with nothing written in the file.
+
+        The prelude is auto-imported, so it appears in every listing.
+        Subtracting the empty file's listing leaves exactly what the
+        answer asked for, which is what the policy is written about --
+        and it does so without this code having to know the prelude's
+        name, which is the kind of thing that changes.
+        """
+        with self._probe(home, "Prelude", "\n") as probe:
+            return self._dependencies(probe, search, timeout_s) or ()
+
+    def observed_imports(self, path: Path, search: Sequence[Path], roots: Sequence[str],
+                         prelude: Sequence[str], timeout_s: float) -> tuple[str, ...] | None:
+        """Module names one staged source imports, minus the implicit prelude."""
+        dependencies = self._dependencies(path, search, timeout_s)
+        if dependencies is None:
+            return None
+        implicit = set(prelude)
+        names = [self._module_name(d, roots) for d in dependencies if d not in implicit]
+        return tuple(dict.fromkeys(names))
+
+    @staticmethod
+    def _sidecar(olean: Path) -> Path:
+        return olean.with_name(olean.name + ".sha256")
+
+    def _cached_artifact_intact(self, olean: Path) -> bool:
+        """Whether a cached artifact still hashes to what was written beside it.
+
+        The cache key decides the *path*; until this existed nothing re-read
+        the file, so a hit was "a file of that name is present". One answer
+        able to write to disk could leave a forged `.olean` in the cache and
+        every later answer -- in this process or a later run -- would import
+        it as the frozen problem, with the poisoner's own record showing an
+        ordinary failure and the beneficiary's showing a clean proof.
+
+        A mismatch is treated as a miss rather than an error: the module is
+        recompiled from its trusted source, which repairs the entry. An entry
+        written before sidecars existed has none and is recompiled once.
+        """
+        try:
+            expected = self._sidecar(olean).read_text(encoding="utf-8").strip()
+        except OSError:
+            return False
+        return bool(expected) and expected == _artifact_digest(olean)
 
     def _build_one(
         self,
@@ -788,7 +1053,7 @@ class Lean4Verifier(Verifier):
             # placeholder body. If this fails to compile, the statement
             # itself is broken, whatever the proof might have said.
             statement = task.formal_statement.rstrip()
-            seam = _find_seam(strip_lean_comments(statement))
+            seam = _find_seam(strip_comments(statement, "lean4"))
             body = statement if seam != -1 else statement + " :="
             return self._probe_file(header, "%s sorry" % body.rstrip())
 

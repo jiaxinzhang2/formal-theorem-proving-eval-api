@@ -261,21 +261,34 @@ def _extension_faults(source: str) -> list[tuple[InterfaceFault, str]]:
     return faults
 
 
-def _import_faults(
-    parsed: LeanFile, allowed: Sequence[str], problem_module: str
-) -> list[tuple[InterfaceFault, str]]:
-    """Imports outside the allowlist.
+def import_violations(
+    modules: Sequence[str], allowed: Sequence[str], problem_module: str
+) -> tuple[str, ...]:
+    """Which of ``modules`` the benchmark does not allow an answer to import.
 
-    The problem's own module is always allowed -- importing it is how an
-    answer reaches the target at all.
+    The problem's own module is allowed by exact name -- importing it is
+    how an answer reaches the target at all -- and nothing *under* it is,
+    which is what keeps a trusted ``Goal`` module holding gold values out
+    of reach. Everything else has to match an allowlisted prefix.
+
+    Shared with the backend's observation of what a module actually
+    imported, so the rule is written once and the two layers cannot
+    disagree about it.
     """
-    bad = [
+    return tuple(
         module
-        for module in parsed.imports()
+        for module in modules
         if module != problem_module and not any(
             module == ok or module.startswith(ok + ".") for ok in allowed if ok
         )
-    ]
+    )
+
+
+def _import_faults(
+    parsed: LeanFile, allowed: Sequence[str], problem_module: str
+) -> list[tuple[InterfaceFault, str]]:
+    """Imports outside the allowlist, as the text reader sees them."""
+    bad = import_violations(parsed.imports(), allowed, problem_module)
     if not bad:
         return []
     return [

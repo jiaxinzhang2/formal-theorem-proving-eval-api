@@ -476,12 +476,26 @@ PATTERNS: tuple[HackPattern, ...] = (
         "lean.elab_metaprogramming",
         HackClass.KERNEL_BYPASS,
         ("lean4",),
-        r"^\s*(?:@\[[^\]]*\]\s*)?(?:local\s+|scoped\s+)?(?:elab|elab_rules|run_cmd|run_elab|initialize)\b",
+        r"^\s*(?:@\[[^\]]*\]\s*)?(?:local\s+|scoped\s+)?(?:elab|elab_rules|run_cmd|run_elab|(?:builtin_)?initialize)\b",
         "%s runs compile-time metaprogramming, which can add declarations "
         "or axioms programmatically, out of reach of any text-level check",
         multiline=True,
         requires=("elab", "run_cmd", "run_elab", "initialize"),
-        example="run_cmd Lean.Elab.Command.elabCommand _",
+        example="builtin_initialize IO.println \"ran at import\"",
+    ),
+    _p(
+        "lean.compile_time_eval",
+        HackClass.KERNEL_BYPASS,
+        ("lean4",),
+        # Not line-anchored: `open Foo in #eval ...` puts the command
+        # mid-line, and flagging an honest proof that somehow contains the
+        # text is the safe failure direction.
+        r"#eval\b",
+        "%s uses `#eval`, which runs arbitrary `IO` while the file "
+        "elaborates -- that reaches the filesystem the grader stages its "
+        "trusted modules in, which is outside what any proof check can see",
+        requires=("#eval",),
+        example="#eval IO.FS.writeFile \"x\" \"y\"",
     ),
 )
 

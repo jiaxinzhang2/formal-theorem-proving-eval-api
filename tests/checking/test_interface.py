@@ -363,3 +363,72 @@ def test_the_example_answer_clears_the_interface():
     assert report.ok, report.format_text()
     # A def, a lemma and an instance, none of them penalised.
     assert report.helper_count == 3
+
+
+# -- the allowlist, re-checked against what Lean actually imported -----
+
+
+class _Observing:
+    """A backend that reports an import the answer's text did not show."""
+
+    def __init__(self, imports):
+        self.imports = imports
+
+    def supports_module_builds(self, **kwargs):
+        return True
+
+    def build_modules(self, modules, *, audit_declaration="", timeout_s=300.0, on_stage=None):
+        from ftp_eval.backends.types import ModuleBuild
+        return ModuleBuild(Status.VERIFIED, axioms=(),
+                           raw={"module_imports": {"FtpEvalBench.Answer": self.imports}})
+
+
+def test_an_import_only_the_prover_saw_still_refuses_the_answer():
+    """The text reader is not the authority on what was imported.
+
+    `/- note -/ import Lean` does not begin its line, and `Lean` is off
+    the default allowlist because of the metaprogramming and unsafe
+    declarations it carries. Lean's own parser settles it.
+    """
+    verdict = grade_interface(
+        problem(), PROBLEM, ANSWER, verifier=_Observing(["FtpEvalBench.P001", "Lean"]),
+        answer_module="FtpEvalBench.Answer",
+    )
+    assert not verdict.solved
+    assert verdict.refused_at == "interface"
+    assert InterfaceFault.IMPORT_NOT_ALLOWED in [fault for fault, _ in verdict.report.faults]
+
+
+def test_a_module_the_grader_could_not_name_is_not_allowed_through():
+    verdict = grade_interface(
+        problem(), PROBLEM, ANSWER, verifier=_Observing(["?/somewhere/Else.olean"]),
+        answer_module="FtpEvalBench.Answer",
+    )
+    assert not verdict.solved
+
+
+def test_the_trusted_goal_module_is_not_importable():
+    """It holds the gold values, and it sits under the problem's own name."""
+    verdict = grade_interface(
+        problem(gold=("1",)), PROBLEM, ANSWER,
+        verifier=_Observing(["FtpEvalBench.P001", "FtpEvalBench.P001.Goal"]),
+        answer_module="FtpEvalBench.Answer",
+    )
+    assert not verdict.solved
+
+
+def test_an_observed_clean_import_list_is_recorded_as_verified():
+    verdict = grade_interface(
+        problem(), PROBLEM, ANSWER, verifier=_Observing(["FtpEvalBench.P001", "Mathlib.Tactic"]),
+        answer_module="FtpEvalBench.Answer",
+    )
+    assert verdict.report.raw["imports_verified"] is True
+    assert verdict.solved
+
+
+def test_a_backend_that_cannot_report_imports_says_so_rather_than_passing_silently():
+    verdict = grade_interface(
+        problem(), PROBLEM, ANSWER, verifier=_Observing(None),
+        answer_module="FtpEvalBench.Answer",
+    )
+    assert verdict.report.raw["imports_verified"] is False

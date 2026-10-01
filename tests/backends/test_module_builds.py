@@ -131,3 +131,173 @@ def test_generated_module_prefix_cannot_collide_with_project_library(tmp_path):
 def test_module_names_cannot_escape_build_root(name):
     with pytest.raises(ValueError, match="module name"):
         ModuleSource(name, "def x := 1")
+
+
+# -- the staged artifacts an answer compiles against -------------------
+#
+# Lean imports an `.olean` without rechecking it against the source it was
+# built from, and kernel replay does not help: a forged module is
+# internally consistent, it is simply a different problem. So the grader
+# records what it wrote and re-reads it before anything else compiles.
+
+
+def staged_olean(home, name="Problem"):
+    return next(home.rglob(name + ".olean"))
+
+
+def tampering_run(tmp_path, monkeypatch, sabotage):
+    """Build Problem, then let the answer's compile run ``sabotage``."""
+    verifier = backend(tmp_path, monkeypatch)
+    modules = [ModuleSource("Problem", "def x := 1", cacheable=True),
+               ModuleSource("Answer", "def y := 1")]
+
+    def build(module, home, *args):
+        path = home / Path(*module.path_parts).with_suffix(".olean")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"compiled " + module.module.encode())
+        if not module.cacheable:
+            sabotage(home)
+        return None
+
+    monkeypatch.setattr(verifier, "_build_one", build)
+    monkeypatch.setattr(verifier, "_audit_last", lambda *args: ModuleBuild(Status.VERIFIED, axioms=()))
+    return verifier.build_modules(modules, audit_declaration="x")
+
+
+def test_a_replaced_trusted_artifact_refuses_the_answer(tmp_path, monkeypatch):
+    def swap(staged):
+        staged_olean(staged).write_bytes(b"forged Problem")
+    build = tampering_run(tmp_path, monkeypatch, swap)
+    assert not build.verified
+    assert "tampering" in build.diagnostics[0].message
+
+
+def test_a_deleted_trusted_artifact_refuses_the_answer(tmp_path, monkeypatch):
+    build = tampering_run(tmp_path, monkeypatch, lambda staged: staged_olean(staged).unlink())
+    assert not build.verified
+    assert "disappeared" in build.diagnostics[0].message
+
+
+def test_an_added_module_refuses_the_answer(tmp_path, monkeypatch):
+    """The staged directory comes first on LEAN_PATH, so a module an
+    answer drops there shadows the library module of the same name."""
+    def smuggle(staged):
+        (staged / "Mathlib").mkdir(parents=True, exist_ok=True)
+        (staged / "Mathlib" / "Tactic.olean").write_bytes(b"shadow")
+    build = tampering_run(tmp_path, monkeypatch, smuggle)
+    assert not build.verified
+    assert "was added" in build.diagnostics[0].message
+
+
+def test_an_untouched_build_is_not_reported_as_tampering(tmp_path, monkeypatch):
+    assert tampering_run(tmp_path, monkeypatch, lambda staged: None).verified
+
+
+def test_a_rewritten_cache_entry_is_recompiled_rather_than_trusted(tmp_path, monkeypatch):
+    """One answer able to write to disk could otherwise leave a forged
+    `.olean` in the shared cache, and every later answer -- in this
+    process or a later run -- would import it as the frozen problem."""
+    verifier = backend(tmp_path, monkeypatch)
+    compiled = []
+
+    def build(module, home, *args):
+        compiled.append(module.module)
+        path = home / Path(*module.path_parts).with_suffix(".olean")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"honest " + module.module.encode())
+        return None
+
+    monkeypatch.setattr(verifier, "_build_one", build)
+    monkeypatch.setattr(verifier, "_audit_last", lambda *args: ModuleBuild(Status.VERIFIED, axioms=()))
+    modules = [ModuleSource("Problem", "def x := 1", cacheable=True),
+               ModuleSource("Answer", "def y := 1")]
+
+    verifier.build_modules(modules, audit_declaration="x")
+    assert verifier.build_modules(modules, audit_declaration="x").reused_cache
+
+    cached = staged_olean(tmp_path / ".ftp_eval_build" / "cache")
+    cached.write_bytes(b"forged Problem")
+    compiled.clear()
+    build_result = verifier.build_modules(modules, audit_declaration="x")
+    assert "Problem" in compiled, "a rewritten cache entry must not be served"
+    assert build_result.verified
+    assert cached.read_bytes() == b"honest Problem"
+
+
+def test_a_swapped_frozen_target_is_refused_in_real_lean(tmp_path):
+    """The whole chain, against a real toolchain, past the text screen.
+
+    The target is false, so any accepted answer is a defect rather than a
+    hard problem. The answer proves `True` and rewrites the staged
+    `Problem.olean` while it elaborates; before the digest check the
+    generated check module imported the forged target, the kernel agreed
+    and the axiom listing came back clean.
+    """
+    import os
+    project = os.environ.get("FTP_EVAL_LEAN_PROJECT")
+    if not project:
+        pytest.skip("set FTP_EVAL_LEAN_PROJECT to a built Std-capable Lake project")
+    verifier = Lean4Verifier(project_dir=project, lake=os.environ.get("FTP_EVAL_LAKE", "lake"))
+    if not verifier.info().available:
+        pytest.skip("Lean toolchain unavailable")
+
+    swap = (
+        '#eval show IO Unit from do\n'
+        '  let raw := (<- IO.getEnv "LEAN_PATH").getD ""\n'
+        '  let parts := (raw.splitOn ":") ++ (raw.splitOn ";")\n'
+        '  let staged := (parts.filter (fun e => (e.splitOn ".ftp_eval_build").length > 1)).head!\n'
+        '  let forge := staged ++ "/forge"\n'
+        '  IO.FS.createDirAll (forge ++ "/FtpEvalBench")\n'
+        '  IO.FS.writeFile (forge ++ "/FtpEvalBench/P001.lean")\n'
+        '    "namespace Problem\nabbrev Target : Prop := True\nend Problem\n"\n'
+        '  let _ <- IO.Process.output\n'
+        '    { cmd := "lean", args := #["FtpEvalBench/P001.lean", "-o", "out.olean"], cwd := forge }\n'
+        '  let victim := staged ++ "/FtpEvalBench/P001.olean"\n'
+        '  try IO.FS.rename victim (victim ++ ".bak") catch _ => pure ()\n'
+        '  try IO.FS.rename (forge ++ "/out.olean") victim catch _ => pure ()\n'
+    )
+    modules = [
+        ModuleSource("FtpEvalBench.P001",
+                     "namespace Problem\nabbrev Target : Prop := 2 + 2 = 5\nend Problem\n",
+                     cacheable=True),
+        ModuleSource("FtpEvalBench.Answer",
+                     "import FtpEvalBench.P001\n%snamespace Submission\n"
+                     "theorem solution : True := trivial\nend Submission\n" % swap),
+        ModuleSource("FtpEvalBench.Answer.Check",
+                     "import FtpEvalBench.P001\nimport FtpEvalBench.Answer\n"
+                     "theorem ftp_eval_target : _root_.Problem.Target :=\n"
+                     "  Submission.solution\n#print axioms ftp_eval_target\n"),
+    ]
+    build = verifier.build_modules(modules, audit_declaration="ftp_eval_target")
+    assert build is not None and not build.verified
+    assert any("tampering" in d.message for d in build.diagnostics)
+
+
+def test_imports_are_read_from_lean_not_from_the_text(tmp_path):
+    """What the module imported, named exactly, against a real toolchain.
+
+    The answer's `import Lean` does not begin its line, which is how it
+    stayed out of the text reader's view. The listing also has to come
+    back with the prelude subtracted and the names cased as written, or
+    the allowlist it feeds would not match anything.
+    """
+    import os
+    project = os.environ.get("FTP_EVAL_LEAN_PROJECT")
+    if not project:
+        pytest.skip("set FTP_EVAL_LEAN_PROJECT to a built Std-capable Lake project")
+    verifier = Lean4Verifier(project_dir=project, lake=os.environ.get("FTP_EVAL_LAKE", "lake"))
+    if not verifier.info().available:
+        pytest.skip("Lean toolchain unavailable")
+
+    modules = [
+        ModuleSource("FtpEvalBench.P001",
+                     "namespace Problem\nabbrev Target : Prop := 2 + 2 = 4\nend Problem\n",
+                     cacheable=True),
+        ModuleSource("FtpEvalBench.Answer",
+                     "import FtpEvalBench.P001\n/- note -/ import Lean\n"
+                     "namespace Submission\ntheorem solution : Problem.Target := by decide\n"
+                     "end Submission\n"),
+    ]
+    build = verifier.build_modules(modules)
+    assert build is not None
+    assert build.raw["module_imports"]["FtpEvalBench.Answer"] == ["FtpEvalBench.P001", "Lean"]

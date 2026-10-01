@@ -10,7 +10,7 @@ from typing import Any, Mapping, Sequence
 
 from .execution.base import ContainerExecutor, ContainerJob, pinned_image
 from .execution.docker import DockerExecutor
-from .lean4 import Lean4Verifier
+from .lean4 import Lean4Verifier, lean_library_prefixes
 from .types import BackendInfo, ProofAttempt, ProofTask
 from .verifier import BackendUnavailable, RawVerdict
 
@@ -26,6 +26,14 @@ class Lean4DockerVerifier(Lean4Verifier):
     name = "lean4-docker"
     requires_strict_environment = True
     requires_replay = True
+    #: Every input is bind-mounted read-only, the only writable place is a
+    #: `noexec` tmpfs, there is no network, no capability and no path back
+    #: to the grading process. See `execution/docker.py`.
+    sandbox = "read-only-linux-container"
+    #: The answer cannot reach the staged trusted modules, the cache, the
+    #: toolchain or the run records, so the interface screen, the kernel,
+    #: the replay and the axiom audit are the only route to a verdict.
+    safe = "adversarial"
 
     def __init__(self, *, image: str = "", executor: ContainerExecutor | None = None,
                  docker: str = "docker", workspace: str | None = None,
@@ -70,17 +78,12 @@ class Lean4DockerVerifier(Lean4Verifier):
             configuration = self.executor.run(self._job(["sh", "-c", "if test -f /project/lakefile.toml; then cat /project/lakefile.toml; else cat /project/lakefile.lean; fi"], timeout_s=30))
             self._image_library_prefixes: set[str] = set()
             if configuration is not None and configuration.returncode == 0:
-                import re
-                text = configuration.stdout
-                self._image_library_prefixes.update(re.findall(r"\blean_lib\s+([A-Za-z_][A-Za-z0-9_]*)", text))
-                for block in re.split(r"(?m)^\s*\[\[lean_lib\]\]\s*", text)[1:]:
-                    match = re.search(r'(?m)^\s*name\s*=\s*"([^".]+)', re.split(r"(?m)^\s*\[", block)[0])
-                    if match:
-                        self._image_library_prefixes.add(match.group(1))
+                self._image_library_prefixes = lean_library_prefixes(configuration.stdout)
             self.environment_metadata = {
                 "image_digest": self.image, "lean_toolchain": toolchain.stdout.strip(),
                 "lake_manifest_sha256": hashlib.sha256(manifest.stdout.encode("utf-8")).hexdigest(),
-                "sandbox": "read-only-linux-container", "kernel_replay": "leanchecker --fresh",
+                "sandbox": self.sandbox, "safe": self.safe,
+                "kernel_replay": "leanchecker --fresh",
                 "worker_limits": {"memory_mb": self.memory_mb, "cpus": self.cpus, "pids": self.pids},
             }
             for package in data.get("packages", []):

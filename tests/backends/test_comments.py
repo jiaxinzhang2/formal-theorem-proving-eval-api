@@ -151,3 +151,39 @@ def test_every_declared_language_has_at_least_one_rule():
 
 def test_empty_input():
     assert strip_comments("", "lean4") == ""
+
+
+# -- lexical forms that look like comment delimiters --------------------
+#
+# Every one of these was verified against Lean 4.29 before it was fixed:
+# Lean compiles the file and runs the command, while a scanner that does
+# not know the form deletes it from the text the screen reads. Deleting
+# live code is the expensive direction -- `sorry`, a fresh `axiom`,
+# `native_decide` and `#eval` all go invisible at once.
+
+
+HIDDEN = "#eval IO.println \"ran\""
+
+
+@pytest.mark.parametrize("before,after", [
+    # `«...»` holds arbitrary characters, so these are two declarations.
+    ("def «/-» : Nat := 0", "def «-/» : Nat := 1"),
+    # `'"'` is one character, not the start of a string literal.
+    ("def c : Char := '\"'\ndef s : String := \"/-\"", "def t : String := \"-/\""),
+    # A raw string ends at a quote followed by as many hashes as it opened.
+    ("def r : String := r#\"a \"/- b\"#", "def q : String := r#\"c -/ d\"#"),
+    # A backslash before the newline continues the literal.
+    ("def g : String := \"abc \\n  /- def\"", "def h : String := \"-/\""),
+])
+def test_a_command_between_lookalike_delimiters_is_not_stripped(before, after):
+    source = "namespace Submission\n%s\n%s\n%s\nend Submission\n" % (before, HIDDEN, after)
+    assert "#eval" in strip_comments(source, "lean4")
+
+
+def test_a_trailing_prime_is_an_identifier_not_a_character_literal():
+    source = "theorem h' : True := trivial\n%s\n" % HIDDEN
+    assert "#eval" in strip_comments(source, "lean4")
+
+
+def test_an_unterminated_quoted_identifier_does_not_swallow_the_file():
+    assert "#eval" in strip_comments("def «open : Nat := 0\n%s\n" % HIDDEN, "lean4")

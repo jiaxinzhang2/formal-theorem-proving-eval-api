@@ -219,7 +219,14 @@ class LeanFile:
         return tuple(d for d in self.declarations if not d.is_statement)
 
     def imports(self) -> tuple[str, ...]:
-        return tuple(re.findall(r"^\s*(?:public\s+)?import\s+(\S+)", self.preamble, re.MULTILINE))
+        # Comments are stripped first. Lean accepts `/- note -/ import Foo`
+        # and an import on a line that begins with the end of a block
+        # comment, while a regex over the raw text only sees one that
+        # starts its own line. An import the reader cannot see is an
+        # import the allowlist cannot refuse -- and `Lean` is off that
+        # list precisely because of what it carries.
+        return tuple(re.findall(r"^\s*(?:public\s+)?import\s+(\S+)",
+                                strip_comments(self.preamble, "lean4"), re.MULTILINE))
 
     def to_dict(self) -> dict[str, Any]:
         return {

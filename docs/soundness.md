@@ -2,6 +2,118 @@
 
 Frozen benchmark grading checks a compiled `Problem.Target` through `Submission.solution` and audits its axiom closure. It does not compare theorem text. The statement-screening sections below describe the independent low-level verifier API. See [architecture](../ARCHITECTURE.md).
 
+## Threat model
+
+### What is assumed rather than checked
+
+The Lean kernel and the pinned toolchain; the organizer's problem modules and
+benchmark manifest; the container runtime under `lean4-docker`, and the host
+operating system. Nothing below establishes immunity to a kernel bug, a
+compiler bug or a container escape. Everything else is checked.
+
+### The rule the rest of this follows
+
+**No verdict rests on reading the answer's source text.** The source screen is
+a cheap early layer that gives a participant a clear message; it is not a
+boundary, because the text a regex reads and the text Lean compiles can be made
+to differ. Verified against Lean 4.29, each of these compiles and runs while a
+scanner that does not know the lexical form deletes it from the screened text:
+
+| the form | why a scanner misses it |
+|---|---|
+| `def «/-» := 0` … `def «-/» := 1` | `«…»` holds arbitrary characters, so these are two declarations and not a comment |
+| `def c : Char := '"'` | one character, not the start of a string literal |
+| `r#"a "/- b"#` | a raw string ends at a quote followed by as many hashes as it opened |
+| `"abc \`<br>`  /- def"` | a backslash before the newline continues the literal |
+| `/- note -/ import Lean` | an import that does not begin its own line |
+
+All five are handled now, and `tests/backends/test_comments.py` keeps them
+handled. The point is not that the list is complete -- it is that it cannot be
+*known* to be complete, so every rule that decides a verdict is enforced
+somewhere the answer's text cannot reach:
+
+| rule | enforced by | if the text screen is fooled |
+|---|---|---|
+| no `sorry`, no placeholder | `#print axioms` closure | `sorryAx` in the listing; refused |
+| no fresh `axiom` | `#print axioms` closure | the axiom is in the listing; refused |
+| no `native_decide` | `#print axioms` closure | `Lean.ofReduceBool` in the listing; refused |
+| the proof inhabits the frozen target | the generated check module's type ascription, kernel-checked | the kernel compares; refused |
+| no unchecked declarations (`debug.skipKernelTC`) | `leanchecker --fresh` replay | **only** replay; mandatory on `lean4-docker`, off by default natively |
+| the frozen target is the one that was frozen | per-artifact SHA-256, re-read before every later compile | refused as tampering |
+| no compile-time execution (`#eval`, `initialize`, `elab`) | the sandbox | contained on `lean4-docker`; **detected, not prevented**, natively |
+| imports | `lean --deps`, Lean's own parser | the observed list is the one enforced; refused |
+
+Imports are read back from Lean rather than from the answer's `import` lines.
+Before each untrusted module compiles, `lean --deps` reports what it actually
+imports; the olean paths are named against the search path Lean itself prints,
+the implicit prelude is subtracted by differencing an empty file, and a path
+under no known root is marked rather than guessed at, so a module the grader
+cannot name is one the allowlist cannot clear. The allowlist rule is
+`import_violations`, written once and applied to both the text and the
+observation. A backend that cannot answer records `imports_verified: false` on
+the answer, which is not the same as a pass.
+
+### Guarantees by backend
+
+| | `mock` | `lean4` | `lean4-docker` |
+|---|---|---|---|
+| `sandbox` | `none` | `none` | `read-only-linux-container` |
+| `safe` | `none` | `none` | `adversarial` |
+| kernel check | no | yes | yes |
+| axiom audit | no | yes | yes |
+| kernel replay | no | opt-in (`require_replay`) | **mandatory** |
+| artifact digests | n/a | yes | yes |
+| imports read from Lean | no | yes | yes |
+| answer cannot reach the grader | n/a | **no** | yes |
+
+Both values are recorded in every run's `environment`, so a score always
+carries what it is worth.
+
+`sandbox = "none"` means the answer's Lean process runs as the grading user,
+with that user's filesystem and network. Per-answer build directories keep two
+answers apart; they do not keep an answer away from the grader. An answer that
+executes code while it elaborates can edit this package, the toolchain or the
+run records, and no check inside the package can see that. The digest checks
+below cover the staged modules specifically, because that is the attack that
+produces a *wrong verdict* rather than a broken one -- but detection is not
+containment. **Grade answers you did not write under `lean4-docker`.**
+
+### Why artifact digests, and why replay is not a substitute
+
+Lean imports an `.olean` without rechecking it against the source it was built
+from. An answer that can write to disk can therefore compile its own
+`Problem.lean` with `Target := True` and swap the file between its own compile
+and the generated check: the kernel then agrees, and `#print axioms` comes back
+clean. Kernel replay does not help, because the forged module is internally
+consistent -- it is simply a different problem. The same write, aimed at the
+build cache instead, persists across answers and across runs, with the
+poisoner's own record showing an ordinary failure and the beneficiary's showing
+an honest proof.
+
+So the grader records the SHA-256 of every artifact it puts on the answer's
+search path and re-reads them before anything else compiles against them, and
+before reading the dependency listing. Cached artifacts carry a digest beside
+them; a mismatch is a miss, not an error, so the module is recompiled from its
+trusted source and the entry repairs itself. An `.olean` the grader did not
+write is refused outright: the staged directory comes first on `LEAN_PATH`, so
+a module dropped there shadows the library module of the same name.
+
+### Known residual risks
+
+* `safe = "none"` backends: everything above about the grader's own files.
+* A Lean kernel or elaborator bug; a `leanchecker` that shares the bug.
+* `debug.skipKernelTC`, whose only backstop is replay. Mandatory under
+  `lean4-docker`; off by default natively, where a `leanchecker --fresh` run
+  costs about a minute even on a bare `Init` project. Exploiting it needs a
+  term the elaborator accepts and the kernel rejects, which would be a Lean
+  bug rather than a harness one -- but the harness should not be betting that
+  there is none.
+* A problem whose `Target` is vacuous or does not mean what its prose says.
+  That is a formalization defect, not a grading one; `ftp-eval audit` probes
+  for it and faithfulness needs a `prose:` line.
+* Resource exhaustion by the answer, bounded by heartbeats, memory and
+  timeouts, and by the container's own limits.
+
 ## Frozen benchmark grading
 
 The problem module is trusted and compiled first. When gold values are supplied,
@@ -10,22 +122,18 @@ The generated check ascribes `Submission.solution` to that frozen constant, then
 audits the dependency closure. Open value problems without gold record only the
 answer's claimed value and do not establish equality to an organizer answer.
 The default axiom allowlist is `propext`, `Classical.choice` and `Quot.sound`.
-A missing listing is an audit failure. Interface screening enforces imports and
-namespace policy and rejects obvious placeholders, fresh axioms and kernel escapes.
+A missing listing is an audit failure. Interface screening enforces namespace
+policy and rejects obvious placeholders, fresh axioms and kernel escapes; the
+import allowlist is enforced against what Lean reports rather than against the
+screen, as the threat model above describes.
 Answers must not add notation, infix/prefix/postfix declarations, syntax categories,
 macros, elaborators or `run_tac`. Attribute commands may target only Submission
 declarations. Local notation is also refused. `Lean` is excluded from the default
 direct import allowlist; organizer dependencies may still import it transitively.
 The stdout axiom parser requires an exact declaration name and exactly one
 matching listing; missing or duplicate listings fail closed.
-See [benchmark policy](../benchmarks/README.md) and [run records](runs.md).
-
-The source screen is conservative and syntactic; it is not a complete Lean
-parser. Verification trusts the selected Lean toolchain, allowed imports and
-benchmark environment. Native execution provides process/build isolation. Docker
-execution adds read-only OS isolation and fresh built-in kernel replay. See
-[container workers](container-workers.md) for its boundaries; these checks do not
-establish immunity to every compiler or kernel vulnerability.
+See [benchmark policy](../benchmarks/README.md), [run records](runs.md) and
+[container workers](container-workers.md).
 
 ## Lower-level verifier screening
 

@@ -6,7 +6,7 @@ from ...backends.types import Diagnostic, ModuleBuild, Severity, Status
 from ..lean_file import parse_lean_file
 from .interface import CHECK_THEOREM, InterfaceFault, InterfaceProblem, InterfaceReport, InterfaceVerdict
 from .policy import ContestPolicy
-from .screening import check_arguments, check_interface
+from .screening import check_arguments, check_interface, import_violations
 from .modules import build_submission_modules
 
 
@@ -78,6 +78,21 @@ def grade_interface(
     except Exception as exc:
         build = ModuleBuild(Status.ERROR, diagnostics=(Diagnostic(Severity.ERROR, str(exc)),))
     verdict.build = build
+    # The allowlist, re-checked against what Lean's own parser says the
+    # answer imported. The text reader can be fooled -- `/- note -/ import
+    # Lean` does not begin its line -- and `Lean` is off the default list
+    # precisely because of what it carries. A backend that cannot answer
+    # the question records that it did not, which is not the same as a pass.
+    observed = (build.raw or {}).get("module_imports") if build is not None else None
+    if isinstance(observed, dict) and module in observed:
+        seen = observed[module]
+        report.raw = {**report.raw, "imports_verified": seen is not None}
+        bad = () if seen is None else import_violations(seen, policy.allowed_imports, problem.module)
+        if bad:
+            detail = ("Lean resolved %s, which the benchmark does not allow. The "
+                      "answer's import lines said otherwise" % ", ".join(bad[:4]))
+            report.faults += ((InterfaceFault.IMPORT_NOT_ALLOWED, detail),)
+            record("interface", "failed", report.to_dict(), detail)
     status = "not_run" if build is None or build.status in (Status.ERROR, Status.SKIPPED) else (
         "passed" if build.verified else "failed"
     )

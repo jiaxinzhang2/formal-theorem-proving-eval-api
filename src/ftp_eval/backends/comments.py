@@ -49,6 +49,25 @@ _SCANNED = {
 }
 
 
+#: A Lean character literal, which may legitimately contain a quote or a
+#: comment delimiter: `'"'`, `'\''`, `'«'`.
+_CHAR_LITERAL = re.compile(r"'(?:\\(?:x[0-9a-fA-F]{2}|u[0-9a-fA-F]{4}|.)|[^'\\\n])'")
+
+#: The opening of a raw string literal: `r"`, `r#"`, `r##"`, ...
+_RAW_STRING = re.compile(r'r#*"')
+
+
+def _ident_char(ch: str) -> bool:
+    """Whether ``ch`` can precede a prime inside one Lean identifier."""
+    return bool(ch) and (ch.isalnum() or ch in "_'!?ₓ₁₂₃₄₅₆₇₈₉₀" or ord(ch) > 0x7F)
+
+
+def _char_literal(text: str, i: int) -> int:
+    """Length of the character literal at ``i``, or 0 if there is none."""
+    match = _CHAR_LITERAL.match(text, i)
+    return match.end() - match.start() if match else 0
+
+
 def _scan(text: str, line: str, block_open: str, block_close: str) -> str:
     """Strip comments with a scanner that understands strings and nesting.
 
@@ -87,6 +106,45 @@ def _scan(text: str, line: str, block_open: str, block_close: str) -> str:
             out.append("\n" if ch == "\n" else " ")
             i += 1
             continue
+
+        if ch == "«":
+            # A French-quoted identifier holds arbitrary characters, so
+            # `def «/-» := 0` is two declarations to Lean and the start of
+            # a block comment to a scanner that does not know about them.
+            # Everything up to the matching `«-/»` then disappears from the
+            # screened text while Lean compiles it: `sorry`, a fresh
+            # `axiom`, `native_decide` and `#eval` all go invisible at once.
+            # Copy the identifier verbatim instead.
+            closed = text.find("»", i + 1)
+            end = n if closed < 0 else closed + 1
+            out.append(text[i:end])
+            i = end
+            continue
+
+        if ch == "'" and _char_literal(text, i) and not _ident_char(text[i - 1] if i else ""):
+            # `'"'` is one character, not the start of a string. Reading it
+            # as a quote desynchronises everything after it, and the next
+            # `/-` Lean sees inside a *string* would then swallow live code.
+            # A trailing prime (`h'`) is an identifier and must not match,
+            # which is what the preceding-character test is for.
+            end = i + _char_literal(text, i)
+            out.append(text[i:end])
+            i = end
+            continue
+
+        if ch == "r" and not _ident_char(text[i - 1] if i else ""):
+            # A raw string `r#"..."#` ends only at a quote followed by the
+            # same number of hashes, and holds unescaped quotes until then.
+            # Reading it as an ordinary literal ends the string early and
+            # desynchronises every delimiter after it.
+            raw = _RAW_STRING.match(text, i)
+            if raw is not None:
+                closer = '"' + "#" * (raw.end() - i - 2)
+                closed = text.find(closer, raw.end())
+                end = n if closed < 0 else closed + len(closer)
+                out.append(text[i:end])
+                i = end
+                continue
 
         if ch == '"':
             # Copy the literal verbatim, escapes included, so nothing

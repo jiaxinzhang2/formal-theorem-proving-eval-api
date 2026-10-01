@@ -16,8 +16,20 @@ count as proof.
 To guard against reward hacking, grading freezes the target before loading an
 answer, restricts imports and environment changes, and builds each answer in
 isolation. The axiom audit checks the proof's transitive dependencies and rejects
-`sorryAx` and axioms outside the benchmark's allowed list. These safeguards and
-their limits are described in [soundness policy](docs/soundness.md).
+`sorryAx` and axioms outside the benchmark's allowed list. Every artifact the
+grader stages is checked by digest before anything else compiles against it,
+because Lean imports an `.olean` without rechecking it.
+
+No verdict rests on reading the answer's source text: the screen is an early
+layer, and each rule is also enforced against the compiled environment or by
+the sandbox. The allowlist is checked against the imports `lean --deps`
+reports, not against the answer's `import` lines. Each backend records what
+contained the answers (`sandbox`) and what the score is worth against one that
+was trying to fool the grader (`safe`). `lean4` is `safe = "none"`: it runs the
+answer as the grading user.
+**Grade answers you did not write under `lean4-docker`.** The threat model,
+the guarantees per backend and the known residual risks are in
+[soundness policy](docs/soundness.md).
 
 ## Reading order
 

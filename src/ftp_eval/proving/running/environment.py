@@ -29,6 +29,12 @@ def observed_toolchain(verifier: Any) -> dict[str, Any]:
         "available": info.available,
         "version": info.version,
         "detail": info.detail,
+        # What the answers ran inside, and what the resulting score is
+        # worth against one that was trying to fool the grader. A number
+        # produced without a sandbox is still a number; it just means
+        # something different, and that difference has to travel with it.
+        "sandbox": getattr(verifier, "sandbox", "none"),
+        "safe": getattr(verifier, "safe", "none"),
     }
     if getattr(verifier, "language", None) == "lean4":
         observed["compiler_options"] = {

@@ -139,7 +139,9 @@ sandbox; `lean4-docker` uses read-only Linux workers and requires strict preflig
 and fresh replay. Each answer gets a unique build directory and
 fresh Lean processes. Only trusted problem modules are cached; cache keys include
 module name, source, trusted dependency sources, compiler options and pinned
-Lake/toolchain/image metadata. `Benchmark` inputs are snapshotted once, and an
+Lake/toolchain/image metadata, and each cached artifact carries a digest so a
+hit is the file that key described rather than a file of that name.
+`Benchmark` inputs are snapshotted once, and an
 injected `ArtifactWriter` receives every checkpoint; folder storage is optional.
 
 `evaluate_benchmark` and `evaluate_submission` return frozen-interface acceptance.

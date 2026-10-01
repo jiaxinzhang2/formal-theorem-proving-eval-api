@@ -125,6 +125,27 @@ class Verifier(abc.ABC):
     #: Whether this backend is safe to call from several threads at once.
     thread_safe: bool = True
 
+    #: What contains an answer while it compiles. ``"none"`` means the
+    #: prover runs as the grading user with that user's filesystem and
+    #: network: ordinary process isolation, no boundary.
+    sandbox: str = "none"
+    #: What the results are worth against an answer that is *trying* to
+    #: fool the grader, as opposed to one that is merely wrong.
+    #:
+    #: ``"none"``
+    #:     Soundness checks run, but an answer that executes code while it
+    #:     elaborates is outside what they cover. Tampering with the
+    #:     grader's own staged artifacts is detected (see
+    #:     ``Lean4Verifier``'s digest checks); tampering with the grader
+    #:     itself is not, because nothing separates the two.
+    #: ``"adversarial"``
+    #:     The answer runs with no network, no writable input and no way
+    #:     to reach the grading process, so the checks are the only path
+    #:     to a verdict.
+    #:
+    #: Recorded in every run, so a score always carries what it is worth.
+    safe: str = "none"
+
     def __init__(self, *, check_soundness: bool = True, **config: Any) -> None:
         self.check_soundness = check_soundness
         self.config: Mapping[str, Any] = dict(config)

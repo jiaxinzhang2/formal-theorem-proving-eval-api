@@ -20,9 +20,12 @@ FTP_EVAL_LEAN_PROJECT=/path/to/project pytest tests/checking/test_task_types.py 
 `FTP_EVAL_LAKE` can select an explicit Lake executable. This compiles all ten
 published task-type answers: six valid proofs/witnesses and four refusals.
 The same variables enable the real-Lean regressions in
-`running/test_incomplete_proofs.py` and `running/test_frozen_health.py`: they
-check rejection of `sorryAx` after bypassing the text screen, a completed proof,
-cheap verification of a least-value witness, a false witness and fatal vacuity.
+`running/test_incomplete_proofs.py`, `running/test_frozen_health.py` and
+`backends/test_module_builds.py`: they check rejection of `sorryAx` after
+bypassing the text screen, a completed proof, cheap verification of a
+least-value witness, a false witness, fatal vacuity, an answer that rewrites
+the staged frozen target while it elaborates, and an import named by Lean that
+the answer's `import` lines did not show.
 For a trusted Linux supervisor with Docker, use an immutable organizer image:
 
 ```bash

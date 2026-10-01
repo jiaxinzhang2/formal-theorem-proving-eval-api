@@ -61,3 +61,43 @@ def test_default_submission_imports_exclude_lean_metaprogramming():
                              ANSWER.replace("import FtpEvalBench.P001", "import FtpEvalBench.P001\nimport Lean"),
                              allowed_imports=DEFAULT_ALLOWED_IMPORTS)
     assert InterfaceFault.IMPORT_NOT_ALLOWED in [fault for fault, _ in report.faults]
+
+
+# -- commands that run while the answer elaborates ---------------------
+
+
+@pytest.mark.parametrize("command", [
+    "#eval IO.FS.writeFile \"x\" \"y\"",
+    "open Nat in #eval IO.println \"x\"",
+    "builtin_initialize IO.println \"x\"",
+    "initialize IO.println \"x\"",
+])
+def test_compile_time_execution_is_refused(command):
+    """`#eval` and friends reach the filesystem the grader stages into.
+
+    Verified against Lean 4.29: a `#eval` in an answer can rewrite the
+    staged `Problem.olean` between its own compile and the generated
+    check, which makes the frozen target say whatever the answer wants.
+    The backend's artifact digests catch that too; this refuses it first.
+    """
+    answer = ANSWER.replace("namespace Submission\n", "namespace Submission\n%s\n" % command)
+    report = check_interface(read_interface_problem(PROBLEM, module="FtpEvalBench.P001"), answer)
+    assert InterfaceFault.REWARD_HACKING in [fault for fault, _ in report.faults]
+
+
+@pytest.mark.parametrize("header", [
+    "/- note -/ import Lean\n",
+    "/- note\n-/ import Lean\n",
+    "   import Lean\n",
+])
+def test_an_import_hidden_behind_a_comment_is_still_refused(header):
+    """Lean reads these as `import Lean`; so must the allowlist.
+
+    `Lean` is off the default list because of the metaprogramming and
+    unsafe declarations it carries, and an import the reader cannot see
+    is an import the allowlist cannot refuse.
+    """
+    answer = ANSWER.replace("import FtpEvalBench.P001\n", "import FtpEvalBench.P001\n" + header)
+    report = check_interface(read_interface_problem(PROBLEM, module="FtpEvalBench.P001"),
+                             answer, allowed_imports=DEFAULT_ALLOWED_IMPORTS)
+    assert InterfaceFault.IMPORT_NOT_ALLOWED in [fault for fault, _ in report.faults]
