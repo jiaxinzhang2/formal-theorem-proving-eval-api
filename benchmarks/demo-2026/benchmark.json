@@ -2,12 +2,12 @@
   "name": "demo-2026",
   "version": "2.0.0",
   "language": "lean4",
-  "description": "Three frozen targets; answers export Submission.solution and may add arbitrary helpers.",
+  "description": "Three real competition-style targets: find a value, prove an identity, prove a divisibility. Answers export Submission.solution and may add arbitrary helpers.",
   "problem_count": 3,
   "toolchain": {
-    "note": "Pin these so a result is reproducible. The grader records them in every run's run.json.",
-    "lean": "leanprover/lean4:v4.15.0",
-    "mathlib_rev": "unpinned-in-this-demo"
+    "note": "These are the pins every file in this benchmark was compiled and graded against. The grader records the observed toolchain in each run's run.json, so a mismatch is visible.",
+    "lean": "leanprover/lean4:v4.35.0-rc3",
+    "mathlib_rev": "95dad55a0a6953864018349124c4b024affedcaa"
   },
   "conventions": {
     "problem_id": "file stem",
@@ -17,8 +17,14 @@
     "P001": {
       "module": "FtpEvalBench.P001",
       "gold_arguments": [
-        "1"
+        "30"
       ]
+    },
+    "P002": {
+      "module": "FtpEvalBench.P002"
+    },
+    "P003": {
+      "module": "FtpEvalBench.P003"
     }
   },
   "policy": {

@@ -47,6 +47,10 @@ For a problem with no value to find, the type is just `Problem.Target`.
 You submit neither the organizer's problem module nor the generated Goal and
 Check modules. Generated sources are saved in the run artifacts for inspection.
 
+`demo-2026/submissions/alice/` holds a worked answer for each of the three
+problems; `bob/` and `carol/` hold the refusal cases. Every file there was
+compiled and graded against the pins in that benchmark's `benchmark.json`.
+
 ### What you may do
 
 * declare as many `def`s, `lemma`s, `theorem`s and `instance`s as you like,

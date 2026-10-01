@@ -54,6 +54,13 @@ class ContestPolicy:
     def __post_init__(self) -> None:
         if not self.isolate_builds:
             raise ValueError("non-isolated builds are not supported")
+        # This class is a public export, so it gets built by hand as well as
+        # from a manifest. A list or tuple here used to survive construction
+        # and then fail inside the axiom audit -- which only runs once a proof
+        # has been *accepted*, so the wrong type broke correct answers and
+        # left refusals working. Normalise instead of trusting the annotation.
+        object.__setattr__(self, "allowed_imports", tuple(self.allowed_imports))
+        object.__setattr__(self, "allowed_axioms", frozenset(self.allowed_axioms))
 
     def to_dict(self) -> dict[str, Any]:
         return {

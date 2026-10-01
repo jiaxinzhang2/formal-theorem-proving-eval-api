@@ -45,8 +45,8 @@ ftp-eval = "ftp_eval.cli:main"
 # here so third-party backends have a documented place to plug in.
 
 [project.urls]
-Homepage = "https://github.com/jiaxinzhang2/formal-theorem-proving-eval-api"
-Issues = "https://github.com/jiaxinzhang2/formal-theorem-proving-eval-api/issues"
+Homepage = "https://github.com/mathdb-lean/formal-theorem-proving-eval-api"
+Issues = "https://github.com/mathdb-lean/formal-theorem-proving-eval-api/issues"
 
 [tool.setuptools.packages.find]
 where = ["src"]

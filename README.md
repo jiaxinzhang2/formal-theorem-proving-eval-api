@@ -2,6 +2,13 @@
 
 A Lean 4 evaluation framework for theorem-proving models, with **frozen targets**,
 proof verification, and reproducible run records.
+
+This repository is published as
+[mathdb-lean/formal-theorem-proving-eval-api](https://github.com/mathdb-lean/formal-theorem-proving-eval-api).
+The companion [problem library](https://github.com/mathdb-lean/problems) imports
+formal statements and publishes compatible benchmarks. The verifier can also
+grade independently authored benchmarks.
+
 The benchmark compiles `Problem.Target` first. An answer imports that module,
 develops any helpers it needs, and exports `Submission.solution : Problem.Target`.
 A witness task uses `Submission.solution : Problem.Target value`; the value can

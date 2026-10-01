@@ -25,6 +25,11 @@ def backend(tmp_path, monkeypatch):
     verifier = Lean4Verifier(project_dir=tmp_path)
     monkeypatch.setattr(verifier, "info", lambda: BackendInfo("lean4", "lean4", True))
     monkeypatch.setattr(verifier, "supports_module_builds", lambda **kwargs: True)
+    # These tests simulate compilation and artifacts without a Lean toolchain.
+    # Import discovery also invokes Lean, so keep it inside the same mock boundary.
+    monkeypatch.setattr(verifier, "_search_roots", lambda *args: ())
+    monkeypatch.setattr(verifier, "_prelude_dependencies", lambda *args: ())
+    monkeypatch.setattr(verifier, "observed_imports", lambda *args: ())
     return verifier
 
 def test_identical_answers_use_unique_build_directories(tmp_path, monkeypatch):
