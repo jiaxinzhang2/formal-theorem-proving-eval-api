@@ -8,7 +8,7 @@ version = "0.1.0"
 description = "A Lean 4 evaluation framework for theorem-proving models, with frozen targets, proof verification, and reproducible run records."
 readme = "README.md"
 requires-python = ">=3.10"
-license = { text = "MIT" }
+license = { text = "Apache-2.0" }
 authors = [{ name = "Jiaxin Zhang" }]
 keywords = [
   "theorem-proving",
@@ -22,7 +22,7 @@ keywords = [
 classifiers = [
   "Development Status :: 3 - Alpha",
   "Intended Audience :: Science/Research",
-  "License :: OSI Approved :: MIT License",
+  "License :: OSI Approved :: Apache Software License",
   "Programming Language :: Python :: 3.10",
   "Programming Language :: Python :: 3.11",
   "Programming Language :: Python :: 3.12",

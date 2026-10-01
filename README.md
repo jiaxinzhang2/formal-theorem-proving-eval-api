@@ -221,4 +221,8 @@ not Lean compilation time.
 
 ## License
 
-[MIT](LICENSE).
+Copyright 2026 The mathdb-lean Authors. Licensed under the
+[Apache License 2.0](LICENSE).
+
+Releases up to and including 0.1.0 were published under the MIT License. That
+grant is not withdrawn for the versions that carried it.
