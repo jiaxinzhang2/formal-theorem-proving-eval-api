@@ -1,8 +1,8 @@
-/-
+import Std
+/-!
 - source: repository example
 - prose: For every n, construct bounded natural coefficients x and y certifying x * (2*n + 3) = y * (2*n + 1) + 1, hence the consecutive odd numbers are coprime.
 -/
-import Std
 
 namespace Problem
 

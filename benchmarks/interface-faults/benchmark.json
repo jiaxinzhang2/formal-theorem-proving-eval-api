@@ -1,0 +1,14 @@
+{
+  "name": "interface-faults",
+  "version": "1.0.0",
+  "description": "One trivial frozen Target and one answer per refusal reason, so every way grading can refuse an answer reaches the report at least once.",
+  "problems": {
+    "P001": {"module": "FtpEvalBench.P001"}
+  },
+  "policy": {
+    "allowed_imports": ["Init", "Std"],
+    "allowed_axioms": ["propext", "Classical.choice", "Quot.sound"],
+    "allow_global_instances": false,
+    "isolate_builds": true
+  }
+}

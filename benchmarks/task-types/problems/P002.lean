@@ -1,8 +1,8 @@
-/-
+import Std
+/-!
 - source: repository example
 - prose: Construct a normal 3 by 3 magic square: distinct entries from 1 through 9, with every row, column and both diagonals summing to 15.
 -/
-import Std
 
 namespace Problem
 

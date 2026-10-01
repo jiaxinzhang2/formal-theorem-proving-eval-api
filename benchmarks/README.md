@@ -8,6 +8,11 @@ demo-2026/
   submissions/bob/P001.lean
 ```
 
+Three fixtures ship with the package, each covering a different axis:
+[demo-2026/](demo-2026/) is the Mathlib quickstart with mixed outcomes,
+[task-types/](task-types/) is Std-only and covers the task *shapes*, and
+[interface-faults/](interface-faults/) carries one answer per refusal reason.
+
 ## What a participant submits
 
 **One `.lean` file per problem, named after the problem id.** Nothing else.
@@ -213,6 +218,46 @@ ftp-eval grade --problems benchmarks/task-types/problems \
 The example manifest deliberately leaves production toolchain pins to the
 organizer. Declare the exact Lean/dependency pins (and immutable image digest
 for Docker) before an official run; see [Docker workers](../docs/container-workers.md).
+
+## Every refusal reason, once
+
+[interface-faults/](interface-faults/) is the third fixture and the only one
+that is about the grader rather than about mathematics. One deliberately
+trivial Std-only Target, and one answer per reason grading can refuse an
+answer for:
+
+| participant | refused for |
+|---|---|
+| [solution-missing](interface-faults/submissions/solution-missing/P001.lean) | helpers, but the one declaration that is the interface was never exported |
+| [problem-namespace](interface-faults/submissions/problem-namespace/P001.lean) | declaring into the sealed `namespace Problem` |
+| [outside-namespace](interface-faults/submissions/outside-namespace/P001.lean) | a top-level declaration, which can collide with another answer's |
+| [import-not-allowed](interface-faults/submissions/import-not-allowed/P001.lean) | `import Lean`, which is off the allowlist |
+| [unparsed](interface-faults/submissions/unparsed/P001.lean) | output that stopped mid-declaration, as a truncated generation does |
+| [global-instance](interface-faults/submissions/global-instance/P001.lean) | a file-level `instance`, which this manifest forbids |
+| [syntax-extension](interface-faults/submissions/syntax-extension/P001.lean) | `notation`, which extends the language the grader reads |
+| [imported-attribute](interface-faults/submissions/imported-attribute/P001.lean) | an attribute aimed at a declaration the answer does not own |
+| [compile-time-eval](interface-faults/submissions/compile-time-eval/P001.lean) | `#eval`, which runs `IO` while the file elaborates |
+
+`solved/` holds the one answer that presents the interface correctly, so the
+fixture cannot pass by refusing everything. No prover is involved: every
+refusal here is decided from the text, which is why the Target only has to be
+real enough to cite. `global-instance` is also the only end-to-end evidence
+that a manifest's `allow_global_instances: false` is really applied --
+instances are allowed by default, because the frozen target makes them
+harmless.
+
+Each reason also has a unit test beside the rule that raises it. What those
+cannot show is that the reason survives into the graded answer, into
+`interface/refused.jsonl` and into the printed counts, which is what
+[tests/running/test_interface_faults.py](../tests/running/test_interface_faults.py)
+pins. `solution_unproved` and `incomplete_proof` are deliberately not here:
+`demo-2026` carries those as honest non-answers, where they belong beside a
+real problem.
+
+```bash
+ftp-eval grade --problems benchmarks/interface-faults/problems \
+  --submissions benchmarks/interface-faults/submissions --out runs
+```
 
 ## MathDB integration
 

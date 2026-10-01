@@ -1,8 +1,8 @@
-/-
+import Std
+/-!
 - source: repository example
 - prose: Describe all natural numbers congruent to 3 modulo 7 and to 5 modulo 11, and prove that the submitted predicate characterizes exactly this infinite solution set.
 -/
-import Std
 
 namespace Problem
 

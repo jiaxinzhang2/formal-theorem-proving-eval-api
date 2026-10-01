@@ -1,8 +1,8 @@
-/-
+import Std
+/-!
 - source: repository example
 - prose: Prove that mirroring a binary tree twice restores it and that its leaf count is one more than its internal-node count.
 -/
-import Std
 
 namespace Problem
 
